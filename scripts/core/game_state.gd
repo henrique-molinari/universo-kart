@@ -11,7 +11,7 @@ const DEFAULT_TRACK := "res://scenes/tracks/campus_circuit.tscn"
 const AI_NAMES: Array[String] = ["Turbo", "Faísca", "Cometa", "Nebulosa", "Órbita", "Quasar", "Pulsar"]
 
 var num_local_players: int = 1
-var num_ai: int = 5
+var num_ai: int = 4  ## NPCs na corrida (2 humanos + 4 = 6 karts)
 var laps: int = 3
 var track_scene: String = DEFAULT_TRACK
 var quality: RenderQuality.Preset = RenderQuality.Preset.HIGH

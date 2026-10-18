@@ -107,7 +107,7 @@ func _run() -> void:
 	_check(await _wait_scene("Race"), "seleção -> corrida")
 	var race := get_tree().current_scene as Race
 	for i in 600:
-		if race.karts.size() == 2:
+		if race.karts.size() >= 2:
 			break
 		await _frames(1)
 	for i in 2:
@@ -137,7 +137,7 @@ func _run() -> void:
 	_check(race2 is Race and race2 != race, "resultado: A -> corre de novo")
 	var r2 := race2 as Race
 	for i in 600:
-		if r2.karts.size() == 2:
+		if r2.karts.size() >= 2:
 			break
 		await _frames(1)
 	r2._show_results()

@@ -13,9 +13,10 @@ var item_icon: ItemIcon
 var msg_label: Label
 var sub_label: Label
 var pad_label: Label
+var total_label: Label
 
 
-func build(k: Kart) -> void:
+func build(k: Kart, racers: int = 2) -> void:
 	kart = k
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -30,6 +31,11 @@ func build(k: Kart) -> void:
 	pos_label.position = Vector2(-190, 6)
 	pos_label.size = Vector2(170, 90)
 	pos_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	pos_label.position = Vector2(-236, 6)
+	total_label = _label(26, Palette.WHITE)
+	total_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	total_label.position = Vector2(-66, 50)
+	total_label.text = "/%d" % racers
 	speed_label = _label(30, Palette.WHITE)
 	speed_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	speed_label.position = Vector2(-240, -56)

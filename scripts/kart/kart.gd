@@ -7,9 +7,15 @@ extends RigidBody3D
 signal item_changed(item: int)
 signal got_hit(kind: String, blocked: bool)
 
-enum Item { NONE, SHIELD, ROCKET, BANANA, TURBO }
-const ITEM_NAMES: Array[String] = ["", "ESCUDO", "FOGUETE", "BANANA", "TURBO"]
-const ITEM_COLORS: Array[Color] = [Color.WHITE, Color(0.3, 0.8, 1.0), Color(1.0, 0.3, 0.2), Color(1.0, 0.9, 0.2), Color(1.0, 0.5, 0.1)]
+enum Item { NONE, SHIELD, ROCKET, BANANA, TURBO, PULSE }
+const ITEM_NAMES: Array[String] = ["", "ESCUDO", "FOGUETE", "BANANA", "TURBO", "PULSO"]
+const ITEM_COLORS: Array[Color] = [Color.WHITE, Color(0.3, 0.8, 1.0), Color(1.0, 0.3, 0.2), Color(1.0, 0.9, 0.2), Color(1.0, 0.5, 0.1), Color(0.55, 0.45, 1.0)]
+## Pulso UNIFEOB (5º item): quem está à frente fica eletrizado e mais lento por SLOW_TIME s.
+const SLOW_TIME := 2.6
+const SLOW_FACTOR := 0.6
+## Largada com boost: acelerar desde o "3" (tolerância de START_GRACE s) dá turbo ao largar.
+const START_GRACE := 0.35
+const START_BOOST_TIME := 1.3
 
 const RADIUS := 0.6
 const MAX_SPEED := 23.0
@@ -40,6 +46,8 @@ var control_enabled: bool = false
 var autopilot: bool = false
 var autopilot_lateral: float = 0.0
 var autopilot_use_items: bool = true
+var ai: AIDriver = null        ## NPC: gera as mesmas entradas que o PlayerInput
+var top_speed_mul := 1.0       ## NPC: habilidade + rubber-band leve (0,94..1,04)
 
 # Entradas (lidas a cada quadro de física).
 var in_steer := 0.0
@@ -63,6 +71,7 @@ var shield_time := 0.0
 var stun_time := 0.0
 var spin_time := 0.0
 var invuln_time := 0.0
+var slow_time := 0.0          ## Pulso: eletrizado e mais lento
 var shake := 0.0
 var drifting := false
 var drift_dir := 0.0
@@ -72,7 +81,7 @@ var finished := false
 var autopilot_drift := false  ## testes/captura: o piloto automático faz drift nas curvas
 
 # Estatísticas (testes/HUD).
-var stats := {"pickups": 0, "used": [0, 0, 0, 0, 0], "hits": 0, "blocked": 0, "respawns": 0, "pads": 0, "max_speed": 0.0, "drifts": 0, "drift_boosts": [0, 0, 0, 0]}
+var stats := {"pickups": 0, "used": [0, 0, 0, 0, 0, 0], "start_boost": 0, "pulsed": 0,"hits": 0, "blocked": 0, "respawns": 0, "pads": 0, "max_speed": 0.0, "drifts": 0, "drift_boosts": [0, 0, 0, 0]}
 
 var model: KartModel
 var _shield_mesh: MeshInstance3D
@@ -80,6 +89,10 @@ var _flames: Array[CPUParticles3D] = []
 var _sparks: Array[CPUParticles3D] = []
 var _smoke: Array[CPUParticles3D] = []
 var _engine: AudioStreamPlayer
+var _engine_3d: AudioStreamPlayer3D   ## NPCs: motor posicional (não soma no mix global)
+var _pulse_fx: Node3D
+var _pulse_mat: StandardMaterial3D
+var _pulse_sparks: CPUParticles3D
 var _air_time := 0.0
 var _visual_yaw := 0.0
 var _stuck_time := 0.0
@@ -170,10 +183,62 @@ func setup(cfg: PlayerConfig, index: int, path: TrackPath, race_node: Node) -> v
 		smk.scale_amount_max = 2.6
 		model.body_root.add_child(smk)
 		_smoke.append(smk)
-	_engine = AudioStreamPlayer.new()
-	_engine.bus = AudioManager.BUS_SFX
-	_engine.volume_db = -17.0
-	add_child(_engine)
+	_build_pulse_fx()
+	if cfg.is_human:
+		_engine = AudioStreamPlayer.new()
+		_engine.bus = AudioManager.BUS_SFX
+		_engine.volume_db = -17.0
+		add_child(_engine)
+	else:
+		_engine_3d = AudioStreamPlayer3D.new()
+		_engine_3d.bus = AudioManager.BUS_SFX
+		_engine_3d.volume_db = -8.0
+		_engine_3d.unit_size = 6.0
+		_engine_3d.max_distance = 70.0
+		add_child(_engine_3d)
+
+
+## Efeito do Pulso: anéis elétricos violeta em volta do kart + faíscas (oculto até ser atingido).
+func _build_pulse_fx() -> void:
+	_pulse_fx = Node3D.new()
+	_pulse_fx.name = "PulseFx"
+	_pulse_fx.visible = false
+	model.body_root.add_child(_pulse_fx)
+	_pulse_mat = StandardMaterial3D.new()
+	_pulse_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_pulse_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_pulse_mat.albedo_color = Color(0.65, 0.55, 1.0, 0.8)
+	_pulse_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_pulse_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	for i in 2:
+		var ring := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 1.05 + i * 0.25
+		tm.outer_radius = 1.15 + i * 0.25
+		tm.rings = 24
+		tm.ring_segments = 6
+		ring.mesh = tm
+		ring.material_override = _pulse_mat
+		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		ring.position = Vector3(0, 0.35 + i * 0.45, 0)
+		ring.rotation = Vector3(0.25 * (1 - 2 * i), 0.0, 0.2)
+		_pulse_fx.add_child(ring)
+	_pulse_sparks = _make_particles(Color(0.4, 0.3, 1.0), Color(0.85, 0.9, 1.0), 30, 0.25)
+	_pulse_sparks.local_coords = true
+	_pulse_sparks.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE_SURFACE
+	_pulse_sparks.emission_sphere_radius = 1.0
+	_pulse_sparks.direction = Vector3.UP
+	_pulse_sparks.spread = 180.0
+	_pulse_sparks.initial_velocity_min = 1.5
+	_pulse_sparks.initial_velocity_max = 4.0
+	_pulse_sparks.position = Vector3(0, 0.6, 0)
+	_pulse_fx.add_child(_pulse_sparks)
+
+
+## Som só dos humanos (os NPCs não enchem o mix global com pulinhos/turbos).
+func _sfx(sfx_name: StringName, db: float = 0.0, pitch: float = 1.0) -> void:
+	if ai == null:
+		AudioManager.sfx(sfx_name, db, pitch)
 
 
 func _make_particles(c0: Color, c1: Color, amount: int, life: float) -> CPUParticles3D:
@@ -231,6 +296,7 @@ func _physics_process(delta: float) -> void:
 	stun_time = maxf(stun_time - delta, 0.0)
 	spin_time = maxf(spin_time - delta, 0.0)
 	invuln_time = maxf(invuln_time - delta, 0.0)
+	slow_time = maxf(slow_time - delta, 0.0)
 	shake = maxf(shake - delta * 2.5, 0.0)
 
 	var ip := in_item
@@ -258,6 +324,9 @@ func can_drive() -> bool:
 func _read_input(delta: float) -> void:
 	if autopilot or finished:
 		_autopilot(delta)
+		return
+	if ai != null:
+		ai.drive(delta)
 		return
 	in_steer = PlayerInput.steer(player_index)
 	in_throttle = PlayerInput.throttle(player_index)
@@ -307,7 +376,7 @@ func give_item(new_item: int) -> void:
 	item = new_item
 	item_changed.emit(item)
 	if new_item != Item.NONE:
-		AudioManager.sfx(&"item")
+		_sfx(&"item")
 
 
 func use_item() -> void:
@@ -324,13 +393,15 @@ func use_item() -> void:
 			race.spawn_rocket(self)
 		Item.BANANA:
 			race.spawn_banana(self)
+		Item.PULSE:
+			race.spawn_pulse(self)
 
 
 func apply_boost(duration: float, power: float = 1.0) -> void:
 	boost_power = maxf(power, boost_power) if boost_time > 0.0 else power
 	boost_time = maxf(boost_time, duration)
 	shake = maxf(shake, 0.5)
-	AudioManager.sfx(&"boost")
+	_sfx(&"boost")
 
 
 func is_shielded() -> bool:
@@ -347,8 +418,17 @@ func hit(kind: String) -> bool:
 	drifting = false
 	drift_charge = 0.0
 	drift_level = 0
+	if kind == "pulse":
+		# Não para o kart: corta o turbo e limita a velocidade por SLOW_TIME s.
+		stats["pulsed"] += 1
+		slow_time = SLOW_TIME
+		boost_time = 0.0
+		shake = maxf(shake, 0.6)
+		_sfx(&"spark", -2.0, 0.6)
+		got_hit.emit(kind, false)
+		return true
 	if kind == "spin":
-		AudioManager.sfx(&"spin")
+		_sfx(&"spin")
 	boost_time = 0.0
 	speed = 0.0
 	_pending_velocity_reset = true
@@ -360,6 +440,20 @@ func hit(kind: String) -> bool:
 		shake = 0.4
 	got_hit.emit(kind, false)
 	return true
+
+
+## Largada com boost (chamado no GO para quem acelerou desde o "3"): turbo, chama e fumaça
+## no escapamento, tremor de câmera e vibração do controle.
+func start_boost() -> void:
+	stats["start_boost"] += 1
+	apply_boost(START_BOOST_TIME, 1.0)
+	shake = maxf(shake, 0.8)
+	for f in _flames:
+		f.restart()
+	if ai == null:
+		var dev := PlayerInput.device_of(player_index)
+		if dev >= 0:
+			Input.start_joy_vibration(dev, 0.35, 0.6, 0.35)
 
 
 func pad_boost() -> void:
@@ -418,10 +512,12 @@ func _integrate_forces(st: PhysicsDirectBodyState3D) -> void:
 	var steer := in_steer if active else 0.0
 
 	# Velocidade máxima conforme superfície e turbo.
-	var vmax := MAX_SPEED
+	var vmax := MAX_SPEED * top_speed_mul
+	if slow_time > 0.0:
+		vmax *= SLOW_FACTOR
 	if surface == TrackPath.Surface.OFFROAD or surface == TrackPath.Surface.OUTSIDE:
 		vmax *= OFFROAD_FACTOR if boost_time <= 0.0 else 0.85
-	if boost_time > 0.0:
+	if boost_time > 0.0 and slow_time <= 0.0:  # eletrizado pelo Pulso: turbos não somam
 		vmax += BOOST_EXTRA * boost_power
 
 	if grounded:
@@ -494,7 +590,7 @@ func _update_drift(dt: float, active: bool, steer: float) -> void:
 				lvl = i
 		if lvl > drift_level:
 			drift_level = lvl
-			AudioManager.sfx(&"spark", -4.0, 0.9 + 0.15 * lvl)
+			_sfx(&"spark", -4.0, 0.9 + 0.15 * lvl)
 	elif active and in_drift and grounded and absf(steer) > 0.3 and speed > DRIFT_MIN_SPEED:
 		drifting = true
 		drift_dir = signf(steer)
@@ -503,7 +599,7 @@ func _update_drift(dt: float, active: bool, steer: float) -> void:
 		stats["drifts"] += 1
 		if model:
 			model.hop()
-		AudioManager.sfx(&"hop", -6.0)
+		_sfx(&"hop", -6.0)
 
 
 ## Termina o drift; se `award`, dá o turbo do nível atingido (0,7 s / 1,2 s / 1,8 s).
@@ -528,7 +624,7 @@ func _check_respawn(delta: float) -> void:
 	_outside_time = _outside_time + delta if surface == TrackPath.Surface.OUTSIDE else 0.0
 	if control_enabled and not finished and in_throttle > 0.5 and absf(speed) < 1.0 and not autopilot:
 		_stuck_time += delta
-	elif control_enabled and autopilot and absf(speed) < 1.0:
+	elif control_enabled and (autopilot or ai != null) and absf(speed) < 1.0:
 		_stuck_time += delta
 	else:
 		_stuck_time = 0.0
@@ -575,17 +671,38 @@ func _update_visual(delta: float) -> void:
 		sp.emitting = drifting and drift_charge > 0.25
 		sp.color = c
 		sp.scale_amount_max = 1.2 + 0.4 * drift_level
+	# Largada com boost: fumaça saindo junto com a chama nos primeiros metros.
+	var burst: bool = stats["start_boost"] > 0 and boost_time > START_BOOST_TIME - 0.6 and speed < 15.0
 	for sm in _smoke:
-		sm.emitting = drifting and grounded
+		sm.emitting = (drifting and grounded) or burst
+	_pulse_fx.visible = slow_time > 0.0
+	if slow_time > 0.0:
+		var t := Time.get_ticks_msec() * 0.001
+		_pulse_fx.rotation.y = t * 9.0
+		_pulse_mat.albedo_color.a = 0.45 + 0.4 * absf(sin(t * 37.0))
+		_pulse_sparks.emitting = true
+	elif _pulse_sparks.emitting:
+		_pulse_sparks.emitting = false
 
 
 func _exit_tree() -> void:
 	if _engine:
 		_engine.stop()
 		_engine.stream = null
+	if _engine_3d:
+		_engine_3d.stop()
+		_engine_3d.stream = null
 
 
 func _update_engine_sound() -> void:
+	if _engine_3d:
+		if _engine_3d.stream == null:
+			_engine_3d.stream = AudioManager.get_sfx(&"engine")
+			if _engine_3d.stream == null:
+				return
+			_engine_3d.play()
+		_engine_3d.pitch_scale = 0.75 + clampf(absf(speed) / MAX_SPEED, 0.0, 1.6) * 0.9 + (0.15 if boost_time > 0.0 else 0.0)
+		return
 	if _engine.stream == null:
 		_engine.stream = AudioManager.get_sfx(&"engine")
 		if _engine.stream == null:

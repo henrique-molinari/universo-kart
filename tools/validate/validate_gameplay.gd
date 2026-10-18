@@ -5,7 +5,9 @@ extends Node
 ## Verifica: karts andam e passam checkpoints, não caem, não atravessam muretas, caixas coletadas,
 ## os 4 itens com efeito (turbo acelera, banana derruba, foguete reto de 3 s atordoa/explode na mureta,
 ## escudo bloqueia banana e foguete), drift com mini-turbo por nível,
-## faixas de turbo aceleram, voltas contam e a corrida termina. Sai com código 0 se tudo passar.
+## faixas de turbo aceleram, voltas contam e a corrida termina. NPCs (4): completam as voltas sem
+## ficar presos, usam itens; largada com boost (acelerar desde o "3"); Pulso (5º item) desacelera quem
+## está à frente e é bloqueado pelo escudo. Sai com código 0 se tudo passar.
 
 const RACE_SCENE := "res://scenes/race.tscn"
 
@@ -13,8 +15,10 @@ var race: Race
 var _checks := 0
 var _done := false
 var _fails := 0
-var _wall_viol := [0, 0]
-var _fall_viol := [0, 0]
+var _wall_viol: Array[int] = []
+var _fall_viol: Array[int] = []
+var _slow_run: Array[float] = []     ## tempo contínuo parado (s) por kart
+var _max_slow_run: Array[float] = []
 var _events_done := {}
 var _pending: Array[Dictionary] = []   ## {t, fn}
 var _pads_seen := [0, 0]
@@ -24,7 +28,7 @@ var _spin_seen := false
 var _lap_marks := [[], []]
 var _prev_lap := [0, 0]
 var _pads: Array[Dictionary] = []
-var _grace := [0.0, 0.0]
+var _grace: Array[float] = []
 var _saved: Array = []
 var _rockets := {}
 
@@ -39,11 +43,23 @@ func _ready() -> void:
 	race = packed.instantiate() as Race
 	race.build_scenery = false
 	race.autopilot = true
+	race.end_when_humans_done = false
 	add_child(race)
 	race.race_finished.connect(_on_finished)
 	while race.karts.size() < 2:
 		await get_tree().physics_frame
 	race.forced_item = Kart.Item.TURBO
+	var n := race.karts.size()
+	for arr: Array in [_wall_viol, _fall_viol]:
+		arr.resize(n)
+		arr.fill(0)
+	for arr: Array in [_slow_run, _max_slow_run, _grace]:
+		arr.resize(n)
+		arr.fill(0.0)
+	_check(n == 6 and race.karts[2].ai != null and race.karts[5].ai != null and race.karts[0].ai == null, "grid com 2 humanos + 4 NPCs (%d karts)" % n)
+	# Largada: o NPC à frente do P1 acelera no "3"; o último NPC acelera tarde (sem boost).
+	race.karts[4].ai.start_press = 2.95
+	race.karts[5].ai.start_press = 1.0
 	_test_wheels()
 	_pads = race.tp.get_boost_pads()
 
@@ -99,12 +115,15 @@ func _later(dt: float, fn: Callable) -> void:
 	_pending.append({"t": race.race_time + dt, "fn": fn})
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
+	if race != null and race.karts.size() >= 6 and race.state == Race.State.RACING and not _events_done.has("start"):
+		_events_done["start"] = true
+		_later(0.55, _test_start_boost)
 	if race == null or race.karts.size() < 2 or race.state == Race.State.COUNTDOWN:
 		return
 	var tp := race.tp
 	var t := race.race_time
-	for i in 2:
+	for i in race.karts.size():
 		var k := race.karts[i]
 		var off := k.track_offset
 		var lat := tp.get_lateral(k.global_position, off)
@@ -118,6 +137,14 @@ func _physics_process(_delta: float) -> void:
 			_stun_seen = true
 		if k.spin_time > 0.0:
 			_spin_seen = true
+		# "Preso": parado com controle e sem estar atordoado/rodopiando/terminado.
+		if k.control_enabled and not k.finished and k.stun_time <= 0.0 and k.spin_time <= 0.0 and absf(k.speed) < 2.0:
+			_slow_run[i] += delta
+			_max_slow_run[i] = maxf(_max_slow_run[i], _slow_run[i])
+		else:
+			_slow_run[i] = 0.0
+		if k.ai != null:
+			continue
 		# Mira as faixas de turbo (o piloto automático passa por cima delas).
 		k.autopilot_lateral = -1.75 if i == 0 else 1.75
 		for pad in _pads:
@@ -148,6 +175,7 @@ func _physics_process(_delta: float) -> void:
 	_event(20.0, "drift_levels", _test_drift_levels)
 	_event(34.0, "rocket", _test_rocket)
 	_event(48.0, "shield_rocket", _test_shield_rocket)
+	_event(56.0, "pulse", _test_pulse)
 	# Drift real (piloto automático com drift) no P2 durante a 2ª volta: turbos por nível + física intacta.
 	if t >= 60.0 and not _events_done.has("drift_on"):
 		_events_done["drift_on"] = true
@@ -177,11 +205,18 @@ func _banana_ahead(k: Kart) -> Area3D:
 	var lat := tp.get_lateral(k.global_position, k.track_offset)
 	var b := RaceObjects.make_banana(tp.to_world(off, lat, 0.0), tp.get_up(off), null)
 	race.objects_root.add_child(b)
+	race.add_hazard(b, off, lat)  # os NPCs desviam (a casca é para o kart testado)
 	return b
 
 
 func _test_banana() -> void:
 	var k := race.karts[1]
+	# Com 6 karts, o P2 pode estar atordoado/invulnerável por um item dos NPCs: zera para o teste.
+	k.stun_time = 0.0
+	k.spin_time = 0.0
+	k.slow_time = 0.0
+	k.shield_time = 0.0
+	k.invuln_time = 0.0
 	var h0: int = k.stats["hits"]
 	_spin_seen = false
 	var dropper := race.karts[0]
@@ -203,7 +238,7 @@ func _test_shield_banana() -> void:
 	k.use_item()
 	var bid := _banana_ahead(k).get_instance_id()
 	_later(2.0, func() -> void:
-		_check(k.stats["hits"] == h0 and k.stats["blocked"] == b0 + 1, "escudo bloqueia a banana")
+		_check(k.stats["hits"] == h0 and k.stats["blocked"] >= b0 + 1, "escudo bloqueia a banana (acertos +%d, bloqueios +%d)" % [k.stats["hits"] - h0, k.stats["blocked"] - b0])
 		_check(not is_instance_id_valid(bid), "banana some ao bater no escudo"))
 
 
@@ -226,6 +261,9 @@ func _find_straight(from_off: float) -> float:
 	var best_c := INF
 	var o := from_off
 	while o < from_off + 600.0:
+		if _npc_near(o):
+			o += 10.0
+			continue
 		var c := 0.0
 		var s := 0.0
 		while s <= 50.0:
@@ -238,6 +276,59 @@ func _find_straight(from_off: float) -> float:
 			break
 		o += 10.0
 	return tp.wrap_offset(best)
+
+
+## Algum NPC no trecho [o-15, o+60] (atrapalharia a linha de tiro dos testes do foguete).
+func _npc_near(o: float) -> bool:
+	for k in race.karts:
+		if k.ai != null:
+			var d := race.tp.delta_offset(o, k.track_offset)
+			if d > -15.0 and d < 60.0:
+				return true
+	return false
+
+
+## Largada com boost: quem acelerou desde o "3" larga com turbo; quem acelerou tarde, não.
+func _test_start_boost() -> void:
+	var k0 := race.karts[0]
+	var late := race.karts[5]
+	var ok: bool = k0.stats["start_boost"] == 1 and race.karts[1].stats["start_boost"] == 1 and race.karts[4].stats["start_boost"] == 1
+	_check(ok, "largada com boost para quem acelerou desde o 3 (P1, P2 e NPC)")
+	_check(late.stats["start_boost"] == 0, "sem boost para quem acelerou tarde (NPC)")
+	_check(k0.speed > 15.0 and late.speed < 12.0, "boost de largada acelera: %.1f m/s x %.1f m/s sem boost" % [k0.speed, late.speed])
+
+
+## Pulso UNIFEOB: o último usa; todos à frente ficam eletrizados/lentos, exceto quem tem escudo.
+func _test_pulse() -> void:
+	var user: Kart = null
+	for k in race.karts:
+		if not k.finished and (user == null or race.progress_of(k.player_index) < race.progress_of(user.player_index)):
+			user = k
+	var ahead: Array[Kart] = []
+	for k in race.karts:
+		# (quem já está com escudo/invulnerável é bloqueado de qualquer jeito: fica fora da conta)
+		if k != user and not k.finished and not k.is_shielded() and race.progress_of(k.player_index) > race.progress_of(user.player_index):
+			ahead.append(k)
+	var shielded := ahead[0]
+	shielded.shield_time = 4.0
+	var b0: int = shielded.stats["blocked"]
+	var p0: int = shielded.stats["pulsed"]
+	var n0 := race.objects_root.get_child_count()
+	user.give_item(Kart.Item.PULSE)
+	user.use_item()
+	var slowed := 0
+	for k in ahead:
+		if k != shielded and k.slow_time > 0.0:
+			slowed += 1
+	_check(ahead.size() >= 2 and slowed == ahead.size() - 1, "Pulso eletriza os %d karts à frente sem escudo (%d)" % [ahead.size() - 1, slowed])
+	_check(user.slow_time == 0.0 and race.objects_root.get_child_count() == n0 + 1, "Pulso não afeta quem usou e gera a onda de choque")
+	_check(shielded.stats["pulsed"] == p0 and shielded.stats["blocked"] == b0 + 1 and shielded.slow_time == 0.0, "escudo bloqueia o Pulso")
+	_later(1.4, func() -> void:
+		var slow_ok := 0
+		for k in ahead:
+			if k != shielded and k.speed < Kart.MAX_SPEED * Kart.SLOW_FACTOR + 1.5:
+				slow_ok += 1
+		_check(slow_ok == ahead.size() - 1, "Pulso desacelera (%d de %d abaixo de %.0f m/s)" % [slow_ok, ahead.size() - 1, Kart.MAX_SPEED * Kart.SLOW_FACTOR + 1.5]))
 
 
 func _newest_rocket() -> Rocket:
@@ -435,13 +526,37 @@ func _on_finished() -> void:
 	var k2 := race.karts[1]
 	var db: Array = k2.stats["drift_boosts"]
 	_check(k2.stats["drifts"] > 0 and db[1] + db[2] + db[3] > 0, "drift real gera mini-turbos (drifts %d, turbos por nível %s)" % [k2.stats["drifts"], str(db)])
-	for key: String in ["turbo", "banana", "shield_banana", "rocket", "shield_rocket", "drift_levels"]:
+	# NPCs.
+	var ai_used := [0, 0, 0, 0, 0, 0]
+	for i in range(2, race.karts.size()):
+		var k := race.karts[i]
+		var d := race.data[i]
+		var nm := k.config.display_name
+		print("[gameplay] NPC %s: %dº em %s%s | checkpoints %d | itens usados %s | acertos %d | respawns %d | parado máx %.1f s | largada %d" % [
+			nm, d["place"], Race.format_time(d["finish_time"]), " (estimado)" if d["forced"] else "", d["count"],
+			str(k.stats["used"]), k.stats["hits"], k.stats["respawns"], _max_slow_run[i], k.stats["start_boost"]])
+		_check(k.finished and not d["forced"] and d["count"] == race.laps * race.cps.size() + 1, "NPC %s completou as %d voltas" % [nm, race.laps])
+		_check(k.stats["respawns"] <= 2 and _max_slow_run[i] < 4.0 and _wall_viol[i] == 0 and _fall_viol[i] == 0,
+			"NPC %s não ficou preso (respawns %d, parado máx %.1f s, fora da mureta %d)" % [nm, k.stats["respawns"], _max_slow_run[i], _wall_viol[i]])
+		var u := 0
+		for it in 6:
+			u += k.stats["used"][it]
+			ai_used[it] += k.stats["used"][it]
+		_check(u >= 2, "NPC %s usou itens (%d)" % [nm, u])
+	var kinds := 0
+	for it in range(1, 6):
+		kinds += 1 if ai_used[it] > 0 else 0
+	_check(kinds >= 3, "NPCs usaram vários tipos de item: %s" % str(ai_used))
+	for i in race.karts.size():
+		if race.data[i]["place"] == 1:
+			print("[gameplay] vencedor: %s" % race.racer_name(i))
+	for key: String in ["turbo", "banana", "shield_banana", "rocket", "shield_rocket", "drift_levels", "start", "pulse"]:
 		_check(_events_done.has(key), "evento '%s' executado" % key)
-	var used := [0, 0, 0, 0, 0]
+	var used := [0, 0, 0, 0, 0, 0]
 	for k in race.karts:
-		for it in 5:
+		for it in 6:
 			used[it] += k.stats["used"][it]
-	_check(used[1] > 0 and used[2] > 0 and used[3] > 0 and used[4] > 0, "itens usados por tipo: %s" % str(used))
+	_check(used[1] > 0 and used[2] > 0 and used[3] > 0 and used[4] > 0 and used[5] > 0, "itens usados por tipo: %s" % str(used))
 	print("[gameplay] %d verificações, %d falhas (tempo de corrida %.1f s)" % [_checks, _fails, race.race_time])
 	_done = true
 	AudioManager.quit_clean(0 if _fails == 0 else 1)

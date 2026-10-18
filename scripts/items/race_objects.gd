@@ -212,3 +212,74 @@ static func explode(parent: Node, pos: Vector3, big: bool = true) -> void:
 	tw.tween_property(light, "light_energy", 0.0, 0.5)
 	tw.chain().tween_interval(0.5)
 	tw.chain().tween_callback(root.queue_free)
+
+
+# ------------------------------------------------------------------ pulso UNIFEOB
+
+## Onda de choque do Pulso: anéis elétricos azul/violeta que se expandem rente ao chão,
+## faíscas radiais e um clarão (as cores da UNIFEOB: azul #0018FE e magenta).
+static func pulse_wave(parent: Node, pos: Vector3, up: Vector3) -> void:
+	var root := Node3D.new()
+	root.name = "PulseWave"
+	parent.add_child(root)
+	root.global_position = pos + up * 0.4
+	root.basis = Basis.looking_at(Vector3.FORWARD.slide(up).normalized() if absf(up.z) < 0.9 else Vector3.RIGHT, up)
+	var tw := root.create_tween().set_parallel(true)
+	var cols: Array[Color] = [Color(0.35, 0.45, 1.0, 0.9), Color(1.0, 0.3, 0.75, 0.8)]
+	for i in 2:
+		var ring := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.9
+		tm.outer_radius = 1.0
+		tm.rings = 48
+		tm.ring_segments = 6
+		ring.mesh = tm
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		m.albedo_color = cols[i]
+		ring.material_override = m
+		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		ring.scale = Vector3(1.0, 1.0 + i * 1.5, 1.0)
+		root.add_child(ring)
+		var dly := 0.08 * i
+		tw.tween_property(ring, "scale", Vector3(26.0, 3.0 + i * 3.0, 26.0), 0.7).set_delay(dly).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+		tw.tween_property(m, "albedo_color:a", 0.0, 0.7).set_delay(dly).set_ease(Tween.EASE_IN)
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 1.0
+	p.amount = 40
+	p.lifetime = 0.5
+	var sm := SphereMesh.new()
+	sm.radius = 0.08
+	sm.height = 0.5
+	sm.radial_segments = 4
+	sm.rings = 2
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.vertex_color_use_as_albedo = true
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sm.material = mat
+	p.mesh = sm
+	p.particle_flag_align_y = true
+	p.direction = Vector3.UP
+	p.spread = 90.0
+	p.flatness = 0.7
+	p.initial_velocity_min = 10.0
+	p.initial_velocity_max = 22.0
+	p.gravity = Vector3.ZERO
+	var g := Gradient.new()
+	g.set_color(0, Color(0.9, 0.95, 1.0))
+	g.set_color(1, Color(0.5, 0.3, 1.0, 0.0))
+	p.color_ramp = g
+	root.add_child(p)
+	p.emitting = true
+	var light := OmniLight3D.new()
+	light.light_color = Color(0.5, 0.45, 1.0)
+	light.light_energy = 8.0
+	light.omni_range = 18.0
+	root.add_child(light)
+	tw.tween_property(light, "light_energy", 0.0, 0.6)
+	tw.chain().tween_interval(0.2)
+	tw.chain().tween_callback(root.queue_free)

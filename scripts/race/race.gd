@@ -40,7 +40,17 @@ var laps := 3
 var cps := PackedFloat32Array()
 var data: Array[Dictionary] = []  ## por kart: next, lap, count, finish_time, place, finished_order
 var finish_count := 0
-var forced_item: int = -1         ## testes: força o item das caixas
+var forced_item: int = -1         ## testes: força o item das caixas (só dos humanos)
+var human_count := 2
+var hazards: Array[Area3D] = []   ## bananas na pista (meta off/lat), para a IA desviar
+## true: quando os humanos terminam, os NPCs restantes recebem posição/tempo estimados.
+## Os testes usam false para ver os NPCs completarem as voltas.
+var end_when_humans_done := true
+var _start_hold := PackedFloat32Array()  ## tempo acelerando sem soltar durante a contagem
+var _prog := PackedFloat32Array()
+var _order: Array[int] = []
+
+var _humans_done_time := -1.0
 var _results: Control
 var _confirm_prev := [true, true]
 var _cancel_prev := [true, true]
@@ -91,15 +101,29 @@ func _ready() -> void:
 	objects_root.name = "RaceObjects"
 	add_child(objects_root)
 
-	for i in 2:
+	# Humanos largam no fim do grid (como no Mario Kart); os NPCs ocupam as primeiras vagas.
+	var ai_cfgs := GameState.build_ai_configs(GameState.num_ai)
+	var total := human_count + ai_cfgs.size()
+	var seed_base := randi()
+	for i in total:
+		var human := i < human_count
+		var cfg: PlayerConfig = GameState.get_player(i) if human else ai_cfgs[i - human_count]
 		var k := Kart.new()
-		k.setup(GameState.get_player(i), i, tp, self)
+		k.setup(cfg, i, tp, self)
 		add_child(k)
-		k.place(tp.get_grid_transform(i))
-		k.autopilot = autopilot
-		k.autopilot_lateral = -1.75 if i == 0 else 1.75
+		var slot := (ai_cfgs.size() + i) if human else (i - human_count)
+		k.place(tp.get_grid_transform(slot))
+		if human:
+			k.autopilot = autopilot
+			k.autopilot_lateral = -1.75 if i == 0 else 1.75
+		else:
+			k.ai = AIDriver.new()
+			k.ai.setup(k, self, i - human_count, seed_base + i * 7919)
 		karts.append(k)
-		data.append({"next": 0, "lap": 0, "count": 0, "finish_time": 0.0, "place": i + 1})
+		data.append({"next": 0, "lap": 0, "count": 0, "finish_time": 0.0, "place": i + 1, "forced": false})
+		_order.append(i)
+	_start_hold.resize(total)
+	_prog.resize(total)
 
 	for row in tp.get_item_rows():
 		var off: float = row["offset"]
@@ -178,7 +202,7 @@ func _build_split_screen() -> void:
 		cam.current = true
 		var hud := PlayerHud.new()
 		vp.add_child(hud)
-		hud.build(karts[i])
+		hud.build(karts[i], karts.size())
 		cams.append(cam)
 		huds.append(hud)
 		viewports.append(vp)
@@ -196,7 +220,7 @@ func _process(delta: float) -> void:
 	for box in item_boxes:
 		var s := box.get_node("Spin") as Node3D
 		s.rotate_y(delta * 1.6)
-	for i in karts.size():
+	for i in huds.size():
 		huds[i].update_hud(data[i]["lap"], laps, data[i]["place"])
 	for ci in 2:
 		var ccam := _closeup_cam if ci == 0 else _closeup_cam2
@@ -248,6 +272,9 @@ func _physics_process(delta: float) -> void:
 	match state:
 		State.COUNTDOWN:
 			countdown -= delta
+			# Largada com boost: conta quanto tempo cada kart acelera sem soltar.
+			for i in karts.size():
+				_start_hold[i] = (_start_hold[i] + delta) if karts[i].in_throttle > 0.5 else 0.0
 			var n := ceili(countdown)
 			if n != _last_go and n > 0:
 				_last_go = n
@@ -256,8 +283,10 @@ func _physics_process(delta: float) -> void:
 				AudioManager.sfx(&"count")
 			if countdown <= 0.0:
 				state = State.RACING
-				for k in karts:
-					k.control_enabled = true
+				for i in karts.size():
+					karts[i].control_enabled = true
+					if _start_hold[i] >= COUNTDOWN_TIME - Kart.START_GRACE:
+						karts[i].start_boost()
 				for h in huds:
 					h.show_message("GO!", "", 0.8)
 				AudioManager.sfx(&"go")
@@ -266,6 +295,7 @@ func _physics_process(delta: float) -> void:
 			for i in karts.size():
 				_update_checkpoints(i)
 			_update_places()
+			_check_humans_done()
 
 
 func _update_checkpoints(i: int) -> void:
@@ -283,9 +313,9 @@ func _update_checkpoints(i: int) -> void:
 		if d["lap"] > laps:
 			_finish(i)
 			return
-		if d["lap"] > 1:
+		if d["lap"] > 1 and i < huds.size():
 			huds[i].show_message("VOLTA %d/%d" % [d["lap"], laps] if d["lap"] < laps else "ÚLTIMA VOLTA!", "", 1.5)
-		if d["lap"] == laps and laps > 1 and not _last_lap_music:
+		if d["lap"] == laps and laps > 1 and not _last_lap_music and karts[i].ai == null:
 			_last_lap_music = true
 			AudioManager.sfx(&"lastlap")
 			AudioManager.set_music_tempo(1.07)
@@ -301,27 +331,58 @@ func progress_of(i: int) -> float:
 	return float(d["count"]) * seg + tp.delta_offset(cps[prev], karts[i].track_offset)
 
 
+## Sem alocação por quadro: progresso em cache + ordenação de um array reutilizado.
 func _update_places() -> void:
-	var order: Array[int] = [0, 1]
-	order.sort_custom(func(a: int, b: int) -> bool: return progress_of(a) > progress_of(b))
-	for p in order.size():
-		if not karts[order[p]].finished:
-			data[order[p]]["place"] = p + 1
+	for i in karts.size():
+		_prog[i] = progress_of(i)
+	_order.sort_custom(_cmp_progress)
+	for p in _order.size():
+		if not karts[_order[p]].finished:
+			data[_order[p]]["place"] = p + 1
 
 
-func _finish(i: int) -> void:
+## Todos os humanos chegaram: os NPCs que faltam recebem colocação e tempo estimados
+## (distância restante a ~21 m/s). Nos testes (end_when_humans_done = false) eles correm até o
+## fim, com limite de 90 s após os humanos.
+func _check_humans_done() -> void:
+	if state != State.RACING or finish_count >= karts.size():
+		return
+	for i in human_count:
+		if not karts[i].finished:
+			return
+	if _humans_done_time < 0.0:
+		_humans_done_time = race_time
+	if not end_when_humans_done and race_time - _humans_done_time < 90.0:
+		return
+	var total_len := tp.length * laps + tp.length / float(cps.size())
+	for i in _order.duplicate():
+		if karts[i].finished:
+			continue
+		data[i]["forced"] = true
+		var remain := maxf(total_len - _prog[i], 0.0)
+		_finish(i, race_time + remain / 21.0)
+
+
+func _finish(i: int, time: float = -1.0) -> void:
 	var d := data[i]
 	var k := karts[i]
+	if time < 0.0:
+		time = race_time
 	d["lap"] = laps
 	finish_count += 1
 	d["place"] = finish_count
-	d["finish_time"] = race_time
+	d["finish_time"] = time
 	k.finished = true
 	k.autopilot_use_items = false
-	huds[i].show_message("%dº LUGAR" % finish_count, "Tempo %s" % format_time(race_time))
-	print("[Race] P%d terminou em %dº (%s)" % [i + 1, finish_count, format_time(race_time)])
+	if i < huds.size():
+		huds[i].show_message("%dº LUGAR" % finish_count, "Tempo %s" % format_time(time))
+	print("[Race] %s terminou em %dº (%s)%s" % [racer_name(i), finish_count, format_time(time), " (estimado)" if d["forced"] else ""])
 	if finish_count >= karts.size():
 		_show_results()
+
+
+func racer_name(i: int) -> String:
+	return ("JOGADOR %d" % (i + 1)) if karts[i].ai == null else karts[i].config.display_name.to_upper()
 
 
 func _show_results() -> void:
@@ -341,18 +402,25 @@ func _show_results() -> void:
 	v.add_theme_constant_override(&"separation", 16)
 	panel.add_child(v)
 	var lines: Array[String] = ["RESULTADO"]
-	var idx: Array[int] = [0, 1]
+	var idx: Array[int] = []
+	for i in karts.size():
+		idx.append(i)
 	idx.sort_custom(func(a: int, b: int) -> bool: return data[a]["place"] < data[b]["place"])
+	var colors: Array[Color] = [Palette.YELLOW]
 	for i in idx:
-		lines.append("%dº  JOGADOR %d   %s" % [data[i]["place"], i + 1, format_time(data[i]["finish_time"])])
+		lines.append("%dº  %s   %s" % [data[i]["place"], racer_name(i), format_time(data[i]["finish_time"])])
+		colors.append(Palette.WHITE if karts[i].ai == null else Color(0.75, 0.8, 0.95))
 	lines.append("A: correr de novo    B: voltar à seleção")
+	colors.append(Palette.WHITE)
+	var row_px := 44 if karts.size() <= 4 else 34
+	v.add_theme_constant_override(&"separation", 16 if karts.size() <= 4 else 8)
 	for j in lines.size():
 		var l := Label.new()
 		l.text = lines[j]
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		l.add_theme_font_override(&"font", PlayerHud.FONT)
-		l.add_theme_font_size_override(&"font_size", 64 if j == 0 else (30 if j == lines.size() - 1 else 44))
-		l.add_theme_color_override(&"font_color", Palette.YELLOW if j == 0 else Palette.WHITE)
+		l.add_theme_font_size_override(&"font_size", 64 if j == 0 else (30 if j == lines.size() - 1 else row_px))
+		l.add_theme_color_override(&"font_color", colors[j])
 		v.add_child(l)
 	panel.reset_size()
 	panel.position = -panel.size * 0.5
@@ -373,15 +441,22 @@ func _on_box_picked(k: Kart, box: Area3D) -> void:
 	k.stats["pickups"] += 1
 	if k.item != Kart.Item.NONE or k.finished:
 		return
-	var it := forced_item
+	var it := forced_item if k.ai == null else -1
 	if it < 0:
-		var pool: Array[int]
-		if data[k.player_index]["place"] == 1:
-			pool = [Kart.Item.SHIELD, Kart.Item.BANANA, Kart.Item.BANANA, Kart.Item.TURBO, Kart.Item.ROCKET]
-		else:
-			pool = [Kart.Item.ROCKET, Kart.Item.ROCKET, Kart.Item.TURBO, Kart.Item.TURBO, Kart.Item.SHIELD, Kart.Item.BANANA]
-		it = pool.pick_random()
+		it = roll_item(data[k.player_index]["place"])
 	k.give_item(it)
+
+
+## Sorteio por posição: o líder recebe itens de defesa; o Pulso só sai da metade de trás do grid.
+func roll_item(place: int) -> int:
+	var pool: Array[int]
+	if place == 1:
+		pool = [Kart.Item.SHIELD, Kart.Item.BANANA, Kart.Item.BANANA, Kart.Item.TURBO, Kart.Item.ROCKET]
+	elif place * 2 <= karts.size():
+		pool = [Kart.Item.ROCKET, Kart.Item.ROCKET, Kart.Item.TURBO, Kart.Item.TURBO, Kart.Item.SHIELD, Kart.Item.BANANA]
+	else:
+		pool = [Kart.Item.ROCKET, Kart.Item.TURBO, Kart.Item.TURBO, Kart.Item.SHIELD, Kart.Item.BANANA, Kart.Item.PULSE, Kart.Item.PULSE]
+	return pool.pick_random()
 
 
 ## Primeiro corredor à frente de `k` (ou null se `k` lidera).
@@ -415,4 +490,36 @@ func spawn_banana(k: Kart) -> Area3D:
 	var lat := tp.get_lateral(k.global_position, k.track_offset)
 	var b := RaceObjects.make_banana(tp.to_world(back, lat, 0.0), tp.get_up(back), k)
 	objects_root.add_child(b)
+	add_hazard(b, back, lat)
 	return b
+
+
+## Registra um perigo para a IA desviar (a lista se limpa sozinha quando ele some).
+func add_hazard(h: Area3D, off: float, lat: float) -> void:
+	h.set_meta(&"off", tp.wrap_offset(off))
+	h.set_meta(&"lat", lat)
+	hazards.append(h)
+	h.tree_exiting.connect(_remove_hazard.bind(h))
+
+
+## Pulso UNIFEOB: onda de choque que eletriza todos os karts À FRENTE de `k` (escudo bloqueia).
+## Retorna quantos foram atingidos.
+func spawn_pulse(k: Kart) -> int:
+	var my := progress_of(k.player_index)
+	var n := 0
+	for o in karts:
+		if o == k or o.finished or progress_of(o.player_index) <= my:
+			continue
+		if o.hit("pulse"):
+			n += 1
+	RaceObjects.pulse_wave(objects_root, k.global_position, k.ground_normal)
+	AudioManager.sfx(&"spark", -3.0, 0.5)
+	return n
+
+
+func _remove_hazard(h: Area3D) -> void:
+	hazards.erase(h)
+
+
+func _cmp_progress(a: int, b: int) -> bool:
+	return _prog[a] > _prog[b]

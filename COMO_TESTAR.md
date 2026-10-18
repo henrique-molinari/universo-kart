@@ -36,15 +36,20 @@
     Acerta qualquer kart no caminho, que fica parado por 2 s e perde a velocidade. Também explode ao bater numa mureta.
   - **Banana**: largada atrás do kart. Quem passar por cima rodopia e perde a velocidade.
   - **Turbo**: aceleração forte por 1,5 s.
+  - **Pulso UNIFEOB** (raio no ícone azul): só sai para quem está na metade de trás. Eletriza todos os karts **à frente**,
+    que ficam 2,6 s mais lentos e sem turbo. O escudo bloqueia.
+- **NPCs**: 4 corredores de IA (6 karts no total). Eles pegam e usam itens, desviam de bananas e karts, fazem drift e
+  miram as faixas de turbo. Os jogadores largam no fim do grid. Posição (ex.: 3º/6) e resultado incluem os NPCs.
+- **Largada com boost**: segure o acelerador desde o "3" até o GO para largar com turbo, chama, tremor de câmera e vibração do controle.
 - **Drift com mini-turbo**: numa curva com velocidade, segure o drift e vire. O kart dá um pulinho e derrapa.
   Fagulhas nas rodas traseiras mostram a carga: **azul → laranja → rosa**. Solte o botão para ganhar um turbo de **0,7 s, 1,2 s ou 1,8 s**, conforme o nível.
   Virar para dentro da curva fecha a derrapagem e carrega mais rápido; virar para fora abre a curva.
 - **Faixas de turbo** (setas animadas no chão): dão ganho de velocidade, chama no kart e tremor de câmera.
-- **Corrida**: contagem 3-2-1-GO, 3 voltas com checkpoints (cortar caminho não conta a volta), posição 1º/2º, tempo na chegada e tela de resultado.
+- **Corrida**: contagem 3-2-1-GO, 3 voltas com checkpoints (cortar caminho não conta a volta), posição entre os 6, tempo na chegada e tela de resultado.
 
 ## Teste automático (sem controle)
 Os dois testes abaixo rodam sem controle:
-- **Gameplay**: roda uma corrida simulada completa com 44 verificações. Cobre voltas, muretas, os 4 itens, o foguete reto de 3 s (inclusive o impacto na mureta), os níveis de turbo do drift e o fim de corrida.
+- **Gameplay**: roda uma corrida simulada completa com 6 karts e 67 verificações. Cobre voltas, muretas, os 5 itens, os NPCs (voltas, travamento e itens), a largada com boost, o foguete reto de 3 s (inclusive o impacto na mureta), os níveis de turbo do drift e o fim de corrida.
 - **Fluxo de telas**: splash → título → seleção → corrida → resultado, com entrada simulada. Confere também se as cores escolhidas chegam ao kart e ao piloto.
 ```
 "C:\Users\henri\Downloads\Godot\Godot_v4.7.2-stable_win64_console.exe" --headless --fixed-fps 60 --path . res://tools/validate/validate_gameplay.tscn
@@ -58,5 +63,5 @@ Os dois testes abaixo rodam sem controle:
    Deixe "Embed PCK" marcado para gerar um único arquivo.
 
 ## Ainda não incluído nesta versão
-NPCs de IA, animação de vitória, menu de opções (volume/qualidade) e o acabamento visual final.
+Animação de vitória, menu de opções (volume/qualidade) e o acabamento visual final.
 Música e efeitos sonoros já vêm incluídos, gerados por código no carregamento.

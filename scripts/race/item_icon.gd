@@ -81,6 +81,14 @@ func _draw() -> void:
 			draw_polyline(_xf(_ellipse(Vector2(0, -8), 34, 33, 16, deg_to_rad(40), deg_to_rad(140)), bx), Color(1.0, 0.97, 0.6), 3.0 * s, true)
 			_shape(_xf(_ellipse(Vector2(-37, 7), 5, 5, 10), bx), Color(0.4, 0.26, 0.08), ow * 0.7)
 			_shape(_xf(_ellipse(Vector2(37, 7), 5, 5, 10), bx), Color(0.4, 0.26, 0.08), ow * 0.7)
+		Kart.Item.PULSE:
+			# Pulso UNIFEOB: disco azul com ondas magenta e um raio amarelo.
+			_shape(_xf(_ellipse(Vector2(50, 50), 40, 40, 40), base), Color(0.0, 0.1, 1.0), ow)
+			for r: float in [30.0, 20.0]:
+				draw_polyline(_xf(_ellipse(Vector2(50, 50), r, r, 24, deg_to_rad(-60), deg_to_rad(240)), base), Color(1.0, 0.1, 0.39, 0.95), 4.0 * s, true)
+			var bolt := PackedVector2Array([Vector2(56, 14), Vector2(34, 54), Vector2(48, 54), Vector2(40, 86), Vector2(68, 42), Vector2(53, 42), Vector2(64, 14)])
+			_shape(_xf(bolt, base), Color(1.0, 0.92, 0.2), ow)
+			draw_polyline(_xf(PackedVector2Array([Vector2(57, 20), Vector2(42, 49)]), base), Color(1, 1, 1, 0.85), 3.0 * s, true)
 		Kart.Item.TURBO:
 			var tx := base * Transform2D(deg_to_rad(-25.0), Vector2(48, 50))
 			var fl := PackedVector2Array([Vector2(-12, 26), Vector2(-20, 46), Vector2(-6, 38), Vector2(0, 52), Vector2(6, 38), Vector2(20, 46), Vector2(12, 26)])
