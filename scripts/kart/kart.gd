@@ -29,12 +29,26 @@ const GRIP := 12.0
 const DRIFT_GRIP := 3.5
 const GROUND_GRAVITY := 38.0
 const AIR_GRAVITY := 28.0
+## Altura de rodagem: no chão, a esfera "flutua" RIDE_GAP acima do asfalto (sem encostar na malha,
+## então não quica nas arestas dos triângulos); até SNAP_RANGE acima disso a altura é corrigida
+## direto pela velocidade normal (amortecida); acima disso (cristas/quedas) vale a gravidade.
+const RIDE_GAP := 0.08
+const SNAP_RANGE := 0.2
+const RIDE_STIFFNESS := 14.0
 const GROUND_MASK := PhysicsLayers.WORLD_ROAD | PhysicsLayers.WORLD_TERRAIN
 ## Drift com mini-turbo (estilo Mario Kart): carga -> nível 1 (azul), 2 (laranja), 3 (rosa/roxo).
 const DRIFT_MIN_SPEED := 10.0
-const DRIFT_LEVEL_CHARGE: Array[float] = [0.0, 0.9, 1.9, 3.0]
+const DRIFT_LEVEL_CHARGE: Array[float] = [0.0, 0.5, 1.1, 1.8]
 const DRIFT_BOOST_TIME: Array[float] = [0.0, 0.7, 1.2, 1.8]
 const DRIFT_BOOST_POWER: Array[float] = [0.0, 0.75, 0.9, 1.05]
+## Carroceria para a colisão kart-contra-kart: retângulo arredondado no plano do chão, medido no
+## modelo (rodas traseiras ±1,04 m, bico -1,34 m, para-choque +1,36 m). A esfera da física fica só para
+## chão/muros; entre karts vale esta forma (Kart.body_overlap + Race._resolve_kart_contacts).
+const BODY_HALF := Vector2(1.0, 1.34)      ## (meia largura, meio comprimento)
+const BODY_ROUND := 0.3                    ## raio dos cantos (pneus/bico arredondados)
+const BUMP_RESTITUTION := 0.4
+const BUMP_MIN_PUSH := 2.5                 ## m/s mínimos de afastamento numa trombada
+const BUMP_GRIP := 3.0                     ## aderência lateral durante a perda de controle
 const DRIFT_COLORS: Array[Color] = [Color(1.0, 0.95, 0.8), Color(0.25, 0.6, 1.0), Color(1.0, 0.55, 0.1), Color(1.0, 0.3, 0.9)]
 
 var player_index: int = 0
@@ -78,16 +92,23 @@ var drift_dir := 0.0
 var drift_charge := 0.0
 var drift_level := 0          ## 0..3 (nível de mini-turbo carregado)
 var finished := false
+var bump_time := 0.0          ## perda de controle momentânea após uma trombada
+var _bump_v := Vector3.ZERO   ## impulso de velocidade pendente (aplicado no passo da física)
+var _bump_dp := Vector3.ZERO  ## correção de posição pendente (desfaz a sobreposição)
+var _bump_cool := 0.0
 var autopilot_drift := false  ## testes/captura: o piloto automático faz drift nas curvas
 
 # Estatísticas (testes/HUD).
-var stats := {"pickups": 0, "used": [0, 0, 0, 0, 0, 0], "start_boost": 0, "pulsed": 0,"hits": 0, "blocked": 0, "respawns": 0, "pads": 0, "max_speed": 0.0, "drifts": 0, "drift_boosts": [0, 0, 0, 0]}
+var stats := {"pickups": 0, "used": [0, 0, 0, 0, 0, 0], "start_boost": 0, "pulsed": 0,"hits": 0, "blocked": 0, "respawns": 0, "pads": 0, "max_speed": 0.0, "drifts": 0, "drift_boosts": [0, 0, 0, 0], "bumps": 0}
 
 var model: KartModel
 var _shield_mesh: MeshInstance3D
 var _flames: Array[CPUParticles3D] = []
 var _sparks: Array[CPUParticles3D] = []
 var _smoke: Array[CPUParticles3D] = []
+var _exhaust: Array[CPUParticles3D] = []   ## baforadas do escapamento ao acelerar
+var _dust: Array[CPUParticles3D] = []      ## poeira de terra fora do asfalto
+static var _soft_tex: GradientTexture2D
 var _engine: AudioStreamPlayer
 var _engine_3d: AudioStreamPlayer3D   ## NPCs: motor posicional (não soma no mix global)
 var _pulse_fx: Node3D
@@ -111,7 +132,8 @@ func setup(cfg: PlayerConfig, index: int, path: TrackPath, race_node: Node) -> v
 	race = race_node
 	name = "Kart%d" % (index + 1)
 	collision_layer = PhysicsLayers.KART
-	collision_mask = PhysicsLayers.WORLD_ROAD | PhysicsLayers.WORLD_WALL | PhysicsLayers.WORLD_TERRAIN | PhysicsLayers.KART
+	# Sem KART na máscara: as esferas não se tocam; a batida entre karts usa a carroceria real.
+	collision_mask = PhysicsLayers.WORLD_ROAD | PhysicsLayers.WORLD_WALL | PhysicsLayers.WORLD_TERRAIN
 	mass = 120.0
 	gravity_scale = 0.0
 	lock_rotation = true
@@ -129,10 +151,9 @@ func setup(cfg: PlayerConfig, index: int, path: TrackPath, race_node: Node) -> v
 	cs.shape = sph
 	add_child(cs)
 
-	model = KartModel.new()
+	model = KartModel.acquire(cfg)  # do pool quando possível (correr de novo é instantâneo)
 	model.name = "Model"
 	add_child(model)
-	model.build(cfg)
 
 	_shield_mesh = MeshInstance3D.new()
 	var sm := SphereMesh.new()
@@ -155,7 +176,7 @@ func setup(cfg: PlayerConfig, index: int, path: TrackPath, race_node: Node) -> v
 
 	# Chama nos escapamentos (turbo), fagulhas e fumaça nas rodas traseiras (drift).
 	for pt in model.exhaust_points:
-		var f := _make_particles(Color(1.0, 0.45, 0.1), Color(1.0, 0.95, 0.5), 28, 0.22)
+		var f := _make_particles(Color(1.0, 0.18, 0.02), Color(1.0, 0.62, 0.15), 30, 0.13, true, 0.3)
 		f.position = pt
 		f.initial_velocity_min = 2.0
 		f.initial_velocity_max = 4.0
@@ -163,7 +184,7 @@ func setup(cfg: PlayerConfig, index: int, path: TrackPath, race_node: Node) -> v
 		model.body_root.add_child(f)
 		_flames.append(f)
 	for pt in model.rear_wheel_points:
-		var sp := _make_particles(Color(1, 1, 1), Color(1, 1, 1), 44, 0.3)
+		var sp := _make_particles(Color(1, 1, 1), Color(1, 1, 1), 44, 0.3, true, 0.16)
 		sp.position = pt
 		sp.direction = Vector3(-signf(pt.x) * 0.5, 0.9, 1.0)
 		sp.spread = 40.0
@@ -174,7 +195,7 @@ func setup(cfg: PlayerConfig, index: int, path: TrackPath, race_node: Node) -> v
 		sp.scale_amount_max = 1.2
 		model.body_root.add_child(sp)
 		_sparks.append(sp)
-		var smk := _make_particles(Color(0.85, 0.85, 0.88), Color(0.95, 0.95, 0.95, 0.3), 10, 0.6)
+		var smk := _make_particles(Color(0.85, 0.85, 0.88), Color(0.95, 0.95, 0.95, 0.45), 16, 0.8, false, 0.5)
 		smk.position = pt + Vector3(0, 0.1, 0.1)
 		smk.direction = Vector3(0, 1, 0.6)
 		smk.initial_velocity_min = 0.6
@@ -183,6 +204,25 @@ func setup(cfg: PlayerConfig, index: int, path: TrackPath, race_node: Node) -> v
 		smk.scale_amount_max = 2.6
 		model.body_root.add_child(smk)
 		_smoke.append(smk)
+		# Poeira de terra (fora do asfalto).
+		var dst := _make_particles(Color(0.6, 0.5, 0.36), Color(0.72, 0.62, 0.46, 0.55), 14, 0.9, false, 0.6)
+		dst.position = pt + Vector3(0, 0.05, 0.15)
+		dst.direction = Vector3(-signf(pt.x) * 0.3, 0.7, 1.0)
+		dst.initial_velocity_min = 1.0
+		dst.initial_velocity_max = 2.6
+		dst.gravity = Vector3(0, -1.5, 0)
+		model.body_root.add_child(dst)
+		_dust.append(dst)
+	# Baforadas do escapamento ao acelerar (fumaça leve azulada).
+	for pt in model.exhaust_points:
+		var ex := _make_particles(Color(0.62, 0.64, 0.7), Color(0.78, 0.8, 0.85, 0.2), 8, 0.6, false, 0.2)
+		ex.position = pt
+		ex.direction = Vector3(0, 0.5, 1.0)
+		ex.spread = 15.0
+		ex.initial_velocity_min = 0.5
+		ex.initial_velocity_max = 1.2
+		model.body_root.add_child(ex)
+		_exhaust.append(ex)
 	_build_pulse_fx()
 	if cfg.is_human:
 		_engine = AudioStreamPlayer.new()
@@ -241,21 +281,45 @@ func _sfx(sfx_name: StringName, db: float = 0.0, pitch: float = 1.0) -> void:
 		AudioManager.sfx(sfx_name, db, pitch)
 
 
-func _make_particles(c0: Color, c1: Color, amount: int, life: float) -> CPUParticles3D:
+## Textura radial suave compartilhada (sprite de partícula sem bordas duras).
+static func _soft_texture() -> GradientTexture2D:
+	if _soft_tex == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(1, 1, 1, 1))
+		g.set_color(1, Color(1, 1, 1, 0))
+		g.add_point(0.4, Color(1, 1, 1, 0.6))
+		_soft_tex = GradientTexture2D.new()
+		_soft_tex.gradient = g
+		_soft_tex.fill = GradientTexture2D.FILL_RADIAL
+		_soft_tex.fill_from = Vector2(0.5, 0.5)
+		_soft_tex.fill_to = Vector2(1.0, 0.5)
+		_soft_tex.width = 64
+		_soft_tex.height = 64
+	return _soft_tex
+
+
+## Partículas em sprite suave voltado para a câmera. `additive` = brilho (fogo/fagulha, encolhe);
+## senão fumaça/poeira com borda difusa no chão (cresce e some).
+func _make_particles(c0: Color, c1: Color, amount: int, life: float, additive: bool = true, size: float = 0.22) -> CPUParticles3D:
 	var p := CPUParticles3D.new()
 	p.amount = amount
 	p.lifetime = life
 	p.emitting = false
 	p.local_coords = false
-	var m := SphereMesh.new()
-	m.radius = 0.09
-	m.height = 0.18
-	m.radial_segments = 6
-	m.rings = 3
+	var m := QuadMesh.new()
+	m.size = Vector2(size, size)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = _soft_texture()
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	mat.billboard_keep_scale = true
+	if additive:
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	else:
+		mat.proximity_fade_enabled = true
+		mat.proximity_fade_distance = 0.6
 	m.material = mat
 	p.mesh = m
 	p.direction = Vector3(0, 0.3, 1)
@@ -265,6 +329,16 @@ func _make_particles(c0: Color, c1: Color, amount: int, life: float) -> CPUParti
 	p.gravity = Vector3.ZERO
 	p.scale_amount_min = 0.6
 	p.scale_amount_max = 1.4
+	p.angle_min = -180.0
+	p.angle_max = 180.0
+	var curve := Curve.new()
+	if additive:
+		curve.add_point(Vector2(0, 1.0))
+		curve.add_point(Vector2(1, 0.25))
+	else:
+		curve.add_point(Vector2(0, 0.45))
+		curve.add_point(Vector2(1, 1.0))
+	p.scale_amount_curve = curve
 	var g := Gradient.new()
 	g.set_color(0, c1)
 	g.set_color(1, Color(c0, 0.0))
@@ -298,6 +372,8 @@ func _physics_process(delta: float) -> void:
 	invuln_time = maxf(invuln_time - delta, 0.0)
 	slow_time = maxf(slow_time - delta, 0.0)
 	shake = maxf(shake - delta * 2.5, 0.0)
+	bump_time = maxf(bump_time - delta, 0.0)
+	_bump_cool = maxf(_bump_cool - delta, 0.0)
 
 	var ip := in_item
 	if ip and not _prev_item and can_act() and item != Item.NONE:
@@ -395,6 +471,8 @@ func use_item() -> void:
 	item = Item.NONE
 	item_changed.emit(item)
 	stats["used"][it] += 1
+	if model:
+		model.driver.throw_gesture()  # só visual: gesto de arremesso do piloto
 	match it:
 		Item.SHIELD:
 			shield_time = 6.0
@@ -467,6 +545,82 @@ func start_boost() -> void:
 			Input.start_joy_vibration(dev, 0.35, 0.6, 0.35)
 
 
+## Trombada (chamado pela Race): `dv` muda a velocidade e `dp` desfaz a sobreposição (aplicados no
+## próximo passo da física); `strength` 0..1 define a perda de controle, o tremor e o som.
+func bump(dv: Vector3, dp: Vector3, strength: float) -> void:
+	_bump_v += dv
+	_bump_dp += dp
+	if strength < 0.12:
+		return
+	stats["bumps"] += 1
+	bump_time = maxf(bump_time, lerpf(0.25, 0.6, strength))
+	if _bump_cool > 0.0:
+		return
+	_bump_cool = 0.3
+	shake = maxf(shake, 0.25 + 0.4 * strength)
+	_sfx(&"explosion", lerpf(-20.0, -9.0, strength), 1.9)
+	if ai == null:
+		var dev := PlayerInput.device_of(player_index)
+		if dev >= 0:
+			Input.start_joy_vibration(dev, 0.3 + 0.4 * strength, 0.5 * strength, 0.18)
+
+
+## Cantos (plano XZ) do retângulo interno da carroceria (sem o arredondamento).
+func _body_corners() -> PackedVector2Array:
+	var f3 := _flat_forward()
+	var fw := Vector2(f3.x, f3.z).normalized()
+	var rt := Vector2(-fw.y, fw.x)
+	var c := Vector2(global_position.x, global_position.z)
+	var h := BODY_HALF - Vector2.ONE * BODY_ROUND
+	return PackedVector2Array([c + rt * h.x + fw * h.y, c - rt * h.x + fw * h.y, c - rt * h.x - fw * h.y, c + rt * h.x - fw * h.y])
+
+
+## Penetração entre as carrocerias de `a` e `b` (retângulos arredondados, plano XZ): vetor que afasta
+## `a` de `b` (comprimento = profundidade), ou zero se não se tocam.
+static func body_overlap(a: Kart, b: Kart) -> Vector2:
+	var pa := a._body_corners()
+	var pb := b._body_corners()
+	var r2 := BODY_ROUND * 2.0
+	var ab := Vector2(a.global_position.x - b.global_position.x, a.global_position.z - b.global_position.z)
+	# SAT dos retângulos internos (4 eixos): se separados, vale a distância entre os contornos.
+	var min_ov := INF
+	var min_axis := Vector2.ZERO
+	for poly in [pa, pb]:
+		for i in 2:
+			var axis := ((poly[i + 1] as Vector2) - (poly[i] as Vector2)).normalized()
+			var a0 := INF
+			var a1 := -INF
+			var b0 := INF
+			var b1 := -INF
+			for p in pa:
+				a0 = minf(a0, p.dot(axis))
+				a1 = maxf(a1, p.dot(axis))
+			for p in pb:
+				b0 = minf(b0, p.dot(axis))
+				b1 = maxf(b1, p.dot(axis))
+			var ov := minf(a1, b1) - maxf(a0, b0)
+			if ov < min_ov:
+				min_ov = ov
+				min_axis = axis if ab.dot(axis) >= 0.0 else -axis
+	if min_ov > 0.0:
+		return min_axis * (min_ov + r2)  # internos já se cruzam: batida funda
+	var best := INF
+	var dir := Vector2.ZERO
+	for k in 2:
+		var P := pa if k == 0 else pb
+		var Q := pb if k == 0 else pa
+		for p in P:
+			for i in 4:
+				var q := Geometry2D.get_closest_point_to_segment(p, Q[i], Q[(i + 1) % 4])
+				var d := p.distance_to(q)
+				if d < best:
+					best = d
+					dir = (p - q) if k == 0 else (q - p)
+	if best >= r2:
+		return Vector2.ZERO
+	return (dir / best if best > 1e-5 else ab.normalized()) * (r2 - best)
+
+
 func pad_boost() -> void:
 	stats["pads"] += 1
 	apply_boost(1.2, 1.0)
@@ -493,7 +647,12 @@ func _integrate_forces(st: PhysicsDirectBodyState3D) -> void:
 		ground_normal = xf.basis.y
 		speed = 0.0
 		_just_teleported = true
+		_bump_v = Vector3.ZERO
+		_bump_dp = Vector3.ZERO
 		return
+	if _bump_dp != Vector3.ZERO:
+		st.transform = Transform3D(st.transform.basis, st.transform.origin + _bump_dp)
+		_bump_dp = Vector3.ZERO
 	var pos := st.transform.origin
 	var q := PhysicsRayQueryParameters3D.create(pos + ground_normal * 0.1, pos - ground_normal * (RADIUS + 0.6), GROUND_MASK, [get_rid()])
 	var hit_res := st.get_space_state().intersect_ray(q)
@@ -506,7 +665,8 @@ func _integrate_forces(st: PhysicsDirectBodyState3D) -> void:
 	ground_normal = ground_normal.lerp(target_n.normalized(), 1.0 - exp(-(14.0 if grounded else 3.0) * dt)).normalized()
 	var n := ground_normal
 
-	var v := st.linear_velocity
+	var v := st.linear_velocity + _bump_v
+	_bump_v = Vector3.ZERO
 	if _pending_velocity_reset:
 		_pending_velocity_reset = false
 		v = n * minf(v.dot(n), 0.0)
@@ -521,6 +681,8 @@ func _integrate_forces(st: PhysicsDirectBodyState3D) -> void:
 	var thr := in_throttle if active else 0.0
 	var brk := in_brake if active else 0.0
 	var steer := in_steer if active else 0.0
+	if bump_time > 0.0:
+		steer *= 0.45  # trombada: direção "leve" por um instante
 
 	# Velocidade máxima conforme superfície e turbo.
 	var vmax := MAX_SPEED * top_speed_mul
@@ -573,12 +735,18 @@ func _integrate_forces(st: PhysicsDirectBodyState3D) -> void:
 
 	# Aderência lateral.
 	var grip := DRIFT_GRIP if drifting else GRIP
+	if bump_time > 0.0:
+		grip = minf(grip, BUMP_GRIP)  # escorrega de lado com o empurrão
 	if not grounded:
 		grip = 1.0
 	lat *= exp(-grip * dt)
 
 	if grounded:
-		vn -= GROUND_GRAVITY * dt
+		var dist: float = (pos - hit_res["position"]).dot(n)
+		if dist < RADIUS + RIDE_GAP + SNAP_RANGE:
+			vn = clampf((RADIUS + RIDE_GAP - dist) * RIDE_STIFFNESS, -8.0, 8.0)
+		else:
+			vn -= GROUND_GRAVITY * dt
 		v = fwd * speed + right * lat + n * vn
 	else:
 		v = fwd * speed + right * lat + n * vn
@@ -671,7 +839,9 @@ func _update_visual(delta: float) -> void:
 	var b := Basis.looking_at(fwd, up).rotated(up, -_visual_yaw)
 	if stun_time > 0.0:
 		b = b.rotated(fwd.cross(up), sin((2.0 - stun_time) * PI) * 0.6)
-	model.global_transform = Transform3D(b, global_position - up * RADIUS)
+	if bump_time > 0.0:
+		b = b.rotated(up, sin(bump_time * 38.0) * 0.16 * minf(bump_time / 0.3, 1.0))  # chacoalha
+	model.global_transform = Transform3D(b, global_position - up * (RADIUS + RIDE_GAP))
 	model.body_root.visible = invuln_time <= 0.0 or int(invuln_time * 12.0) % 2 == 0
 	model.animate(speed, in_steer if can_act() else 0.0, delta, drift_dir if drifting else 0.0)
 	_shield_mesh.visible = shield_time > 0.0
@@ -686,6 +856,11 @@ func _update_visual(delta: float) -> void:
 	var burst: bool = stats["start_boost"] > 0 and boost_time > START_BOOST_TIME - 0.6 and speed < 15.0
 	for sm in _smoke:
 		sm.emitting = (drifting and grounded) or burst
+	var off := surface == TrackPath.Surface.OFFROAD or surface == TrackPath.Surface.OUTSIDE
+	for d in _dust:
+		d.emitting = grounded and off and absf(speed) > 4.0
+	for e in _exhaust:
+		e.emitting = can_act() and in_throttle > 0.3 and boost_time <= 0.0 and absf(speed) < 8.0  # só na arrancada
 	_pulse_fx.visible = slow_time > 0.0
 	if slow_time > 0.0:
 		var t := Time.get_ticks_msec() * 0.001

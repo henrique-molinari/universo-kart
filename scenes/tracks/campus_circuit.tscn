@@ -14,8 +14,8 @@ environment = ExtResource("4_env")
 
 [node name="Sun" type="DirectionalLight3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.6, 0.8, 0, -0.8, 0.6, 0, 50, 0)
-light_color = Color(1, 0.96, 0.9, 1)
-light_energy = 1.25
+light_color = Color(1, 0.94, 0.84, 1)
+light_energy = 1.4
 light_angular_distance = 0.5
 shadow_enabled = true
 shadow_bias = 0.03
@@ -31,6 +31,7 @@ directional_shadow_max_distance = 200.0
 script = ExtResource("5_sky")
 world_environment = NodePath("../WorldEnvironment")
 sun = NodePath("../Sun")
+sun_elevation_deg = 44.0
 
 [node name="TrackPath" type="Node3D" parent="."]
 script = ExtResource("2_path")

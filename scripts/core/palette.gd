@@ -10,7 +10,19 @@ const LAVENDER := Color(0.8392, 0.8549, 1.0)      # #D6DAFF
 const LAVENDER_LIGHT := Color(0.9608, 0.9647, 1.0) # #F5F6FF
 const WHITE := Color(1.0, 1.0, 1.0)
 
-## Cores selecionáveis para capacete/traje/kart (a UNIFEOB primeiro).
+## Interface (menus/telas): neutros grafite com UM acento quente (o amarelo UNIFEOB, dessaturado)
+## para seleção/destaque e o azul da marca só em detalhes finos. Cores saturadas ficam para os karts.
+const UI_INK := Color(0.045, 0.05, 0.062)           # fundo profundo
+const UI_PANEL := Color(0.075, 0.082, 0.098, 0.93)  # painéis
+const UI_LINE := Color(1.0, 1.0, 1.0, 0.13)         # bordas discretas
+const UI_TEXT := Color(0.93, 0.94, 0.95)            # texto principal
+const UI_MUTED := Color(0.58, 0.61, 0.67)           # texto secundário/dicas
+const UI_ACCENT := Color(0.95, 0.83, 0.38)          # acento (amarelo UNIFEOB suavizado)
+const UI_BRAND := Color(0.42, 0.5, 0.98)            # azul UNIFEOB clareado (detalhes)
+const UI_OK := Color(0.56, 0.84, 0.63)              # "pronto"
+const UI_OUTLINE := Color(0.02, 0.022, 0.03)        # contorno do texto
+
+## Cores selecionáveis para o kart (a UNIFEOB primeiro).
 const KART_COLORS: Array[Color] = [
 	Color(0.0, 0.0941, 0.9961),
 	Color(1.0, 0.0941, 0.3882),

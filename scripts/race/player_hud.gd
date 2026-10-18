@@ -3,6 +3,7 @@ extends Control
 ## HUD mínimo de um jogador (dentro da sua SubViewport): item, volta, posição, velocímetro, mensagens.
 
 const FONT := preload("res://assets/fonts/title_font.tres")
+const SPEED_LINES := preload("res://assets/shaders/speed_lines.gdshader")
 
 var kart: Kart
 var lap_label: Label
@@ -14,27 +15,37 @@ var msg_label: Label
 var sub_label: Label
 var pad_label: Label
 var total_label: Label
+var minimap: MiniMap
+var speed_lines: ColorRect
+var _lines_mat: ShaderMaterial
+var _lines_k := 0.0
 
 
 func build(k: Kart, racers: int = 2) -> void:
 	kart = k
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Linhas de velocidade (turbo), por baixo do resto do HUD.
+	speed_lines = ColorRect.new()
+	speed_lines.set_anchors_preset(Control.PRESET_FULL_RECT)
+	speed_lines.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lines_mat = ShaderMaterial.new()
+	_lines_mat.shader = SPEED_LINES
+	speed_lines.material = _lines_mat
+	add_child(speed_lines)
 	var tag := _label(18, Palette.WHITE)
 	tag.text = "P%d" % (k.player_index + 1)
 	tag.position = Vector2(24, 14)
 	tag.add_theme_color_override(&"font_color", k.config.kart_color.lightened(0.35))
 	lap_label = _label(34, Palette.WHITE)
 	lap_label.position = Vector2(24, 36)
+	# Posição no canto esquerdo, abaixo da volta (o canto direito é do minimapa).
 	pos_label = _label(72, Palette.YELLOW)
-	pos_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	pos_label.position = Vector2(-190, 6)
-	pos_label.size = Vector2(170, 90)
+	pos_label.position = Vector2(20, 66)
+	pos_label.size = Vector2(110, 90)
 	pos_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	pos_label.position = Vector2(-236, 6)
 	total_label = _label(26, Palette.WHITE)
-	total_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	total_label.position = Vector2(-66, 50)
+	total_label.position = Vector2(134, 110)
 	total_label.text = "/%d" % racers
 	speed_label = _label(30, Palette.WHITE)
 	speed_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -44,9 +55,12 @@ func build(k: Kart, racers: int = 2) -> void:
 
 	item_panel = PanelContainer.new()
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.02, 0.05, 0.25, 0.75)
-	sb.border_color = Palette.WHITE
-	sb.set_border_width_all(3)
+	# Encaixe de vidro escuro (o ícone 3D é o destaque).
+	sb.bg_color = Color(0.05, 0.06, 0.08, 0.72)
+	sb.border_color = Color(1, 1, 1, 0.3)
+	sb.set_border_width_all(2)
+	sb.shadow_color = Color(0, 0, 0, 0.35)
+	sb.shadow_size = 10
 	sb.set_corner_radius_all(14)
 	sb.content_margin_left = 18
 	sb.content_margin_right = 18
@@ -79,6 +93,16 @@ func build(k: Kart, racers: int = 2) -> void:
 	pad_label.position = Vector2(24, -40)
 
 
+## Minimapa no canto superior direito com todos os corredores.
+func setup_minimap(tp: TrackPath, all_karts: Array[Kart]) -> void:
+	minimap = MiniMap.new()
+	minimap.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	minimap.size = Vector2(320, 240)
+	minimap.position = Vector2(-336, 14)
+	add_child(minimap)
+	minimap.setup(tp, all_karts, kart)
+
+
 func _label(size_px: int, c: Color) -> Label:
 	var l := Label.new()
 	l.add_theme_font_override(&"font", FONT)
@@ -94,6 +118,12 @@ func _label(size_px: int, c: Color) -> Label:
 func update_hud(lap: int, laps: int, place: int) -> void:
 	lap_label.text = "VOLTA %d/%d" % [clampi(lap, 1, laps), laps]
 	pos_label.text = "%dº" % place
+	var want := 1.0 if kart.boost_time > 0.0 and kart.speed > 12.0 else 0.0
+	_lines_k = move_toward(_lines_k, want, get_process_delta_time() * 4.0)
+	_lines_mat.set_shader_parameter(&"intensity", _lines_k)
+	if size.y > 0.0:
+		_lines_mat.set_shader_parameter(&"aspect", size.x / size.y)
+	speed_lines.visible = _lines_k > 0.001
 	speed_label.text = "%d km/h" % roundi(absf(kart.speed) * 3.6)
 	item_icon.item = kart.item
 	var dev := PlayerInput.device_of(kart.player_index)

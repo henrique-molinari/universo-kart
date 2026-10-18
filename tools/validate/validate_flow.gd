@@ -11,6 +11,11 @@ var _fails := 0
 
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS  # continua rodando com o jogo pausado
+	# Configurações próprias do teste (não mexe nos volumes salvos do jogador).
+	AudioManager.settings_path = "user://settings_test.cfg"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(AudioManager.settings_path))
+	AudioManager.load_settings()
 	get_tree().create_timer(300.0, true, true, true).timeout.connect(func() -> void:
 		if _done:
 			return
@@ -59,10 +64,19 @@ func _tap_key(key: Key) -> void:
 		await _frames(3)
 
 
+## Cor predominante do traje: mediana (por canal) das cores da 1ª superfície (tecido).
 static func _mesh_color(mi: MeshInstance3D) -> Color:
 	var arr := mi.mesh.surface_get_arrays(0)
 	var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
-	return cols[0]
+	var ch: Array = [[], [], []]
+	for c in cols:
+		ch[0].append(c.r)
+		ch[1].append(c.g)
+		ch[2].append(c.b)
+	for a: Array in ch:
+		a.sort()
+	var m := cols.size() / 2
+	return Color(ch[0][m], ch[1][m], ch[2][m])
 
 
 func _run() -> void:
@@ -100,9 +114,9 @@ func _run() -> void:
 	var want: Array[int] = [(s0[0] + 2) % n, (s0[1] - 1 + n) % n]
 	var want_c: Array[int] = [1 - c0[0], c0[1]]
 	_check(sel.sel == want, "cada jogador troca a própria cor (P1 %d->%d, P2 %d->%d)" % [s0[0], sel.sel[0], s0[1], sel.sel[1]])
-	_check(sel.char_sel == want_c, "cada jogador escolhe o próprio ET (P1 %s, P2 %s)" % [AlienDriver.NAMES[sel.char_sel[0]], AlienDriver.NAMES[sel.char_sel[1]]])
+	_check(sel.char_sel == want_c, "cada jogador escolhe o próprio ET (P1 %s, P2 %s)" % [Characters.NAMES[sel.char_sel[0]], Characters.NAMES[sel.char_sel[1]]])
 	var pm: KartModel = sel._models[0]
-	_check(pm != null and pm.paint_color == Palette.SELECT_COLORS[want[0]] and pm.suit_color == pm.paint_color and pm.character == want_c[0],
+	_check(pm != null and pm.paint_color == Palette.SELECT_COLORS[want[0]] and pm.suit_color == Characters.suit_color(want_c[0]) and pm.character == want_c[0],
 		"prévia 3D do P1 mostra o ET e a cor escolhidos")
 	await _tap_action(&"p1_confirm")
 	_check(sel.ready_flags[0] and not sel.ready_flags[1], "P1 PRONTO (P2 ainda não)")
@@ -124,24 +138,75 @@ func _run() -> void:
 		var m := k.model
 		var suit := _mesh_color(m.driver.body)
 		_check(k.config.kart_color == c and m.paint_color == c, "P%d: kart na cor escolhida (%s)" % [i + 1, Palette.SELECT_COLOR_NAMES[want[i]]])
-		var tol := 0.01
-		var same := absf(suit.r - c.r) < tol and absf(suit.g - c.g) < tol and absf(suit.b - c.b) < tol
-		_check(same and k.config.suit_color == c, "P%d: traje do ET = cor do kart" % (i + 1))
+		var tol := 0.05  # sombreado esculpido (oclusão) escurece levemente o tecido
+		var sc := Characters.suit_color(want_c[i])
+		var same := absf(suit.r - sc.r) < tol and absf(suit.g - sc.g) < tol and absf(suit.b - sc.b) < tol
+		_check(same and k.config.suit_color == sc and sc != c, "P%d: traje na cor do personagem (não do kart)" % (i + 1))
 		_check(k.config.character == want_c[i] and m.character == want_c[i] and m.driver.character == want_c[i],
-			"P%d: ET escolhido no kart (%s)" % [i + 1, AlienDriver.NAMES[want_c[i]]])
+			"P%d: ET escolhido no kart (%s)" % [i + 1, Characters.NAMES[want_c[i]]])
 	var npc_chars: Array[int] = []
 	for i in range(2, race.karts.size()):
 		npc_chars.append(race.karts[i].model.character)
-	_check(npc_chars.has(0) and npc_chars.has(1) and absi(npc_chars.count(0) - npc_chars.count(1)) <= 1,
-		"NPCs distribuídos entre os 2 ETs %s" % str(npc_chars))
+	var npc_pilots := npc_chars.filter(func(c: int) -> bool: return Characters.is_pilot(c))
+	_check(npc_chars.has(0) and npc_chars.has(1) and npc_pilots.size() == 2 and npc_pilots[0] != npc_pilots[1],
+		"NPCs: os 2 ETs + 2 pilotos diferentes %s" % str(npc_chars))
 	await _frames(30)
 	_check(AudioManager.current_music() == &"race", "música da corrida tocando/pedida")
+	var mm_ok := race.huds.size() == 2
+	for i in race.huds.size():
+		var mm := race.huds[i].minimap
+		mm_ok = mm_ok and mm != null and mm.me == race.karts[i] and mm.karts.size() == race.karts.size() \
+			and mm._pts.size() > 100 and mm.position.x > mm.get_parent_control().size.x * 0.5
+	_check(mm_ok, "minimapa no canto superior direito de cada tela com os %d corredores" % race.karts.size())
 
 	# Fim de corrida: a comemoração (vitória/derrota) toca ANTES do resultado.
 	for i in 400:
 		if race.state == Race.State.RACING:
 			break
 		await _frames(1)
+	# Pausa: Esc congela a corrida inteira e abre o menu; ◀ baixa a música; Esc fecha e retoma.
+	await _tap_action(&"p1_pause")
+	await _frames(5)
+	var t_pause := race.race_time
+	var kpos := race.karts[2].global_position
+	await _frames(40)
+	_check(get_tree().paused and race.pause_menu != null and race.race_time == t_pause and race.karts[2].global_position == kpos,
+		"Esc pausa tudo (tempo e karts parados) e abre o menu")
+	race.pause_menu.selected = PauseMenu.Item.MUSIC
+	await _frames(2)
+	var panel_w0 := race.pause_menu.panel.size
+	await _tap_action(&"p1_left")
+	await _tap_action(&"p1_left")
+	var vol := AudioManager.music_volume
+	var bus_db := AudioServer.get_bus_volume_db(AudioServer.get_bus_index(AudioManager.BUS_MUSIC))
+	_check(is_equal_approx(vol, 0.8) and bus_db < AudioManager.MUSIC_BUS_DB - 1.0, "menu de pausa: ◀ baixa a música (%d%%)" % roundi(vol * 100.0))
+	await _tap_key(KEY_ENTER)
+	await _frames(2)
+	_check(race.pause_menu.panel.size == panel_w0, "barra de volume com largura fixa: o painel não muda de tamanho (%s, também em MUDO)" % str(race.pause_menu.panel.size))
+	_check(AudioManager.music_volume == 0.0, "Enter do teclado confirma no menu de pausa (MÚSICA -> mudo)")
+	AudioManager.set_music_volume(1.0)
+	# EFEITOS SONOROS: volume independente da música (◀ baixa só o barramento SFX).
+	race.pause_menu.selected = PauseMenu.Item.SFX
+	await _tap_action(&"p1_left")
+	await _tap_action(&"p1_left")
+	await _tap_action(&"p1_left")
+	var sfx_db := AudioServer.get_bus_volume_db(AudioServer.get_bus_index(AudioManager.BUS_SFX))
+	var mus_db := AudioServer.get_bus_volume_db(AudioServer.get_bus_index(AudioManager.BUS_MUSIC))
+	_check(is_equal_approx(AudioManager.sfx_volume, 0.7) and AudioManager.music_volume == 1.0
+		and sfx_db < AudioManager.SFX_BUS_DB - 1.0 and is_equal_approx(mus_db, AudioManager.MUSIC_BUS_DB),
+		"menu de pausa: EFEITOS SONOROS (%d%%) independente da MÚSICA (%d%%)" % [roundi(AudioManager.sfx_volume * 100.0), roundi(AudioManager.music_volume * 100.0)])
+	# Persistência: os valores salvos voltam ao carregar as configurações (nova sessão).
+	AudioManager.set_music_volume(0.4)
+	AudioManager.music_volume = 1.0
+	AudioManager.sfx_volume = 1.0
+	AudioManager.load_settings()
+	_check(is_equal_approx(AudioManager.music_volume, 0.4) and is_equal_approx(AudioManager.sfx_volume, 0.7),
+		"volumes salvos entre sessões (música 40%, efeitos 70%)")
+	AudioManager.set_music_volume(1.0)
+	AudioManager.set_sfx_volume(1.0)
+	await _tap_action(&"p1_pause")
+	await _frames(20)
+	_check(not get_tree().paused and race.pause_menu == null and race.race_time > t_pause, "Esc de novo fecha o menu e a corrida continua")
 	race._force_finish(1)
 	await _frames(2)
 	_check(race.state == Race.State.CELEBRATION and race.winner == 1 and race.karts[1].model.driver.pose == AlienDriver.Pose.VICTORY

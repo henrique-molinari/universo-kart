@@ -4,7 +4,7 @@ extends Control
 ## controle/teclado (PlayerInput, mesma atribuição de device da corrida): ▲ ▼ alterna entre as linhas
 ## PERSONAGEM e COR, ◀ ▶ troca o valor, A/Enter confirma ("PRONTO!", o ET comemora na prévia),
 ## B cancela o PRONTO (ou volta ao título se não estava pronto). Cores e personagens repetidos são permitidos.
-## Prévia 3D do kart + ET (traje na cor do kart) girando num pedestal.
+## Prévia 3D do kart + piloto (traje na cor do personagem) girando num pedestal.
 ## Quando os dois confirmam, personagem e cor vão para GameState.players e a corrida começa.
 
 const RACE_SCENE := "res://scenes/race.tscn"
@@ -34,13 +34,17 @@ var _t := 0.0
 
 
 func _ready() -> void:
+	SceneRouter.scene_leaving.connect(func(_p: String) -> void:
+		for m in _models:
+			if is_instance_valid(m):
+				m.release())
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	PlayerInput.refresh()
 	Input.joy_connection_changed.connect(_on_joy_changed)
 	AudioManager.play_music(&"title")
 	for i in 2:
 		sel[i] = clampi(GameState.get_player(i).color_index, 0, Palette.SELECT_COLORS.size() - 1)
-		char_sel[i] = clampi(GameState.get_player(i).character, 0, AlienDriver.NAMES.size() - 1)
+		char_sel[i] = clampi(GameState.get_player(i).character, 0, Characters.NAMES.size() - 1)
 	# Fundo sóbrio e dessaturado (os karts coloridos se destacam), com padrão sutil.
 	var bg := ColorRect.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -49,7 +53,7 @@ func _ready() -> void:
 	bgm.shader = BG_SHADER
 	bg.material = bgm
 	add_child(bg)
-	var header := UiKit.label("ESCOLHA SEU ET E A COR DO KART", 64, Palette.YELLOW, 12)
+	var header := UiKit.label("ESCOLHA SEU PILOTO E A COR DO KART", 56, Palette.UI_TEXT, 10)
 	UiKit.anchor(header, Control.PRESET_CENTER_TOP, Rect2(-800, 24, 1600, 90))
 	add_child(header)
 	var row := HBoxContainer.new()
@@ -58,10 +62,10 @@ func _ready() -> void:
 	add_child(row)
 	for i in 2:
 		row.add_child(_build_panel(i))
-	var foot := UiKit.label("▲ ▼ personagem / cor     ◀ ▶ trocar     A / Enter: PRONTO!     B: voltar", 30, Palette.WHITE, 6)
+	var foot := UiKit.label("▲ ▼ personagem / cor     ◀ ▶ trocar     A / Enter: PRONTO!     B: voltar", 28, Palette.UI_TEXT.darkened(0.1), 6)
 	UiKit.anchor(foot, Control.PRESET_CENTER_BOTTOM, Rect2(-900, -104, 1800, 44))
 	add_child(foot)
-	var note := UiKit.label("Personagens e cores podem se repetir. A corrida começa quando os dois estiverem PRONTOS.", 22, Color(1, 1, 1, 0.75), 4)
+	var note := UiKit.label("Personagens e cores podem se repetir. A corrida começa quando os dois estiverem PRONTOS.", 22, Palette.UI_MUTED, 4)
 	UiKit.anchor(note, Control.PRESET_CENTER_BOTTOM, Rect2(-900, -58, 1800, 36))
 	add_child(note)
 	for i in 2:
@@ -75,20 +79,17 @@ func _on_joy_changed(_device: int, _connected: bool) -> void:
 func _build_panel(i: int) -> Control:
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(1, 1, 1, 0.05)
-	sb.set_border_width_all(5)
-	sb.border_color = Color(1, 1, 1, 0.35)
-	sb.set_corner_radius_all(28)
-	sb.set_content_margin_all(22)
+	var sb := UiKit.panel_style(Palette.UI_ACCENT, 20, 22)
+	sb.bg_color = Color(1, 1, 1, 0.035)
+	sb.shadow_size = 0
 	panel.add_theme_stylebox_override(&"panel", sb)
 	_panels.append(panel)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override(&"separation", 10)
 	panel.add_child(v)
-	var title := UiKit.label("JOGADOR %d" % (i + 1), 52, Palette.WHITE, 10)
+	var title := UiKit.label("JOGADOR %d" % (i + 1), 48, Palette.UI_TEXT, 8)
 	v.add_child(title)
-	var dev := UiKit.label("", 22, Color(1, 1, 1, 0.7), 4)
+	var dev := UiKit.label("", 22, Palette.UI_MUTED, 4)
 	v.add_child(dev)
 	_device_labels.append(dev)
 
@@ -105,10 +106,10 @@ func _build_panel(i: int) -> Control:
 	cont.add_child(vp)
 	_build_preview_world(vp)
 
-	var char_l := UiKit.label("", 40, Palette.WHITE, 8)
+	var char_l := UiKit.label("", 40, Palette.UI_TEXT, 8)
 	v.add_child(char_l)
 	_char_labels.append(char_l)
-	var name_l := UiKit.label("", 30, Palette.WHITE, 6)
+	var name_l := UiKit.label("", 30, Palette.UI_MUTED, 6)
 	v.add_child(name_l)
 	_name_labels.append(name_l)
 	var sw_row := HBoxContainer.new()
@@ -122,12 +123,12 @@ func _build_panel(i: int) -> Control:
 		ssb.bg_color = Palette.SELECT_COLORS[c]
 		ssb.set_corner_radius_all(35)
 		ssb.set_border_width_all(4)
-		ssb.border_color = Color(1, 1, 1, 0.25)
+		ssb.border_color = Color(0, 0, 0, 0.35)
 		sw.add_theme_stylebox_override(&"panel", ssb)
 		sw.pivot_offset = Vector2(35, 35)
 		sw_row.add_child(sw)
 		_swatches[i].append(sw)
-	var status := UiKit.label("", 46, Palette.YELLOW, 10)
+	var status := UiKit.label("", 42, Palette.UI_MUTED, 8)
 	status.custom_minimum_size = Vector2(0, 70)
 	v.add_child(status)
 	_status_labels.append(status)
@@ -141,10 +142,10 @@ func _build_preview_world(vp: SubViewport) -> void:
 	env.background_mode = Environment.BG_CLEAR_COLOR
 	var sky := Sky.new()
 	var psm := ProceduralSkyMaterial.new()
-	psm.sky_top_color = Color(0.35, 0.55, 1.0)
-	psm.sky_horizon_color = Color(0.85, 0.9, 1.0)
-	psm.ground_bottom_color = Color(0.1, 0.12, 0.3)
-	psm.ground_horizon_color = Color(0.6, 0.65, 0.85)
+	psm.sky_top_color = Color(0.42, 0.46, 0.55)
+	psm.sky_horizon_color = Color(0.82, 0.83, 0.86)
+	psm.ground_bottom_color = Color(0.1, 0.105, 0.12)
+	psm.ground_horizon_color = Color(0.5, 0.52, 0.56)
 	sky.sky_material = psm
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
@@ -165,6 +166,12 @@ func _build_preview_world(vp: SubViewport) -> void:
 	fill.light_energy = 0.45
 	fill.light_color = Color(0.8, 0.85, 1.0)
 	root.add_child(fill)
+	# Luz de contorno (rim light) por trás, destacando a silhueta do personagem.
+	var rim := DirectionalLight3D.new()
+	rim.basis = Basis.looking_at(Vector3(0.25, -0.55, 1.0).normalized())
+	rim.light_energy = 1.8
+	rim.light_color = Color(0.9, 0.94, 1.0)
+	root.add_child(rim)
 	# Pedestal.
 	var ped := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
@@ -186,10 +193,10 @@ func _build_preview_world(vp: SubViewport) -> void:
 	tor.outer_radius = 2.03
 	ring.mesh = tor
 	var rm := StandardMaterial3D.new()
-	rm.albedo_color = Palette.MAGENTA
+	rm.albedo_color = Palette.UI_ACCENT
 	rm.emission_enabled = true
-	rm.emission = Palette.MAGENTA
-	rm.emission_energy_multiplier = 1.5
+	rm.emission = Palette.UI_ACCENT
+	rm.emission_energy_multiplier = 0.55
 	ring.material_override = rm
 	root.add_child(ring)
 	var tt := Node3D.new()
@@ -212,25 +219,24 @@ func _refresh(i: int) -> void:
 	cfg.set_color(c)
 	cfg.character = char_sel[i]
 	if _models[i] != null:
-		_models[i].queue_free()
-	var m := KartModel.new()
-	m.build(cfg)
+		_models[i].release()
+	var m := KartModel.acquire(cfg)
 	m.position = Vector3(0, 0, 0.1)
 	_turntables[i].add_child(m)
 	_models[i] = m
 	var on_char := row[i] == 0 and not ready_flags[i]
 	var on_col := row[i] == 1 and not ready_flags[i]
-	_char_labels[i].text = ("◀  %s  ▶" if on_char else "%s") % AlienDriver.NAMES[char_sel[i]].to_upper()
-	_char_labels[i].add_theme_color_override(&"font_color", Palette.YELLOW if on_char else Palette.WHITE)
+	_char_labels[i].text = ("◀  %s  ▶" if on_char else "%s") % Characters.NAMES[char_sel[i]].to_upper()
+	_char_labels[i].add_theme_color_override(&"font_color", Palette.UI_ACCENT if on_char else Palette.UI_TEXT)
 	_name_labels[i].text = ("◀  KART %s  ▶" if on_col else "KART %s") % Palette.SELECT_COLOR_NAMES[sel[i]].to_upper()
-	_name_labels[i].add_theme_color_override(&"font_color", c.lightened(0.25) if on_col else Color(1, 1, 1, 0.8))
+	_name_labels[i].add_theme_color_override(&"font_color", Palette.UI_ACCENT if on_col else Palette.UI_MUTED)
 	if ready_flags[i]:
 		m.set_pose(AlienDriver.Pose.VICTORY)
 	for k in _swatches[i].size():
 		var sw: Panel = _swatches[i][k]
 		var sb := sw.get_theme_stylebox(&"panel") as StyleBoxFlat
 		var on: bool = k == sel[i]
-		sb.border_color = Palette.WHITE if on else Color(1, 1, 1, 0.25)
+		sb.border_color = Palette.UI_TEXT if on else Color(0, 0, 0, 0.35)
 		sb.set_border_width_all(7 if on else 3)
 		sw.scale = Vector2.ONE * (1.18 if on else 1.0)
 	_update_status(i)
@@ -240,12 +246,12 @@ func _update_status(i: int) -> void:
 	var sb := _panels[i].get_theme_stylebox(&"panel") as StyleBoxFlat
 	if ready_flags[i]:
 		_status_labels[i].text = "PRONTO!"
-		_status_labels[i].add_theme_color_override(&"font_color", Color(0.35, 1.0, 0.45))
-		sb.border_color = Color(0.35, 1.0, 0.45)
+		_status_labels[i].add_theme_color_override(&"font_color", Palette.UI_OK)
+		sb.border_color = Palette.UI_OK
 	else:
 		_status_labels[i].text = "▲ ▼  ◀ ▶"
-		_status_labels[i].add_theme_color_override(&"font_color", Palette.YELLOW)
-		sb.border_color = Palette.SELECT_COLORS[sel[i]].lightened(0.3)
+		_status_labels[i].add_theme_color_override(&"font_color", Palette.UI_MUTED)
+		sb.border_color = Palette.UI_LINE
 
 
 func _confirm_pressed(i: int) -> bool:
@@ -274,7 +280,7 @@ func _process(delta: float) -> void:
 			_refresh(i)
 		if not ready_flags[i] and nav != 0 and nav != _prev_nav[i]:
 			if row[i] == 0:
-				char_sel[i] = wrapi(char_sel[i] + nav, 0, AlienDriver.NAMES.size())
+				char_sel[i] = wrapi(char_sel[i] + nav, 0, Characters.NAMES.size())
 			else:
 				sel[i] = wrapi(sel[i] + nav, 0, Palette.SELECT_COLORS.size())
 			AudioManager.sfx(&"move")
@@ -315,6 +321,6 @@ func _start_race() -> void:
 		cfg.color_index = sel[i]
 		cfg.set_color(Palette.SELECT_COLORS[sel[i]])
 		cfg.character = char_sel[i]
-	print("[Select] P1 %s / %s, P2 %s / %s" % [AlienDriver.NAMES[char_sel[0]], Palette.SELECT_COLOR_NAMES[sel[0]], AlienDriver.NAMES[char_sel[1]], Palette.SELECT_COLOR_NAMES[sel[1]]])
+	print("[Select] P1 %s / %s, P2 %s / %s" % [Characters.NAMES[char_sel[0]], Palette.SELECT_COLOR_NAMES[sel[0]], Characters.NAMES[char_sel[1]], Palette.SELECT_COLOR_NAMES[sel[1]]])
 	AudioManager.sfx(&"go")
 	SceneRouter.goto(RACE_SCENE)

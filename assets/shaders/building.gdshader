@@ -66,12 +66,40 @@ void fragment() {
 		// Janelas: vidro com variação por janela, reflexo do céu (Fresnel), persianas e caixilhos.
 		float r = hash12(id + floor(world_pos.xz * 0.01) * 17.0);
 		float r2 = hash12(id * 1.37 + 5.1);
-		vec3 glass = glass_color.rgb * (0.7 + 0.45 * f.y) * (0.8 + r * 0.4);
-		glass = mix(glass, glass * vec3(0.85, 0.95, 1.1), step(0.7, r2));
-		float fres = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 3.0);
-		glass = mix(glass, sky_reflect.rgb, clamp(fres * 0.8 + 0.08, 0.0, 0.85));
-		// Persianas em parte das janelas (faixa clara no topo).
+		// Interior falso ("interior mapping"): raio da câmera entra numa sala-caixa atrás do vidro.
 		float wy_rel = (f.y - lo.y) / max(wy, 0.001);
+		float wx_rel = (f.x - lo.x) / max(wx, 0.001);
+		vec3 nw = normalize(world_nrm);
+		float det = dFdx(UV.x) * dFdy(UV.y) - dFdy(UV.x) * dFdx(UV.y);
+		vec3 tw = (dFdx(world_pos) * dFdy(UV.y) - dFdy(world_pos) * dFdx(UV.y)) * sign(det);
+		tw = tw - nw * dot(tw, nw);
+		tw = length(tw) > 1e-5 ? normalize(tw) : normalize(cross(vec3(0.0, 1.0, 0.0), nw));
+		vec3 bw = normalize(cross(nw, tw)) * sign(dot(cross(nw, tw), vec3(0.0, 1.0, 0.0)) + 1e-4);
+		vec3 vw = normalize(world_pos - CAMERA_POSITION_WORLD);
+		vec3 rd = vec3(dot(vw, tw), dot(vw, bw), max(dot(vw, -nw), 0.06));
+		vec3 hs = vec3(cw * wx * 0.5, fh * wy * 0.5, 2.8 + r * 1.6);
+		vec3 ro = vec3((wx_rel * 2.0 - 1.0) * hs.x, (wy_rel * 2.0 - 1.0) * hs.y, 0.0);
+		vec3 tb = (sign(rd) * hs - ro) / rd;
+		tb.z = hs.z / rd.z;
+		float th = min(min(tb.x, tb.y), tb.z);
+		vec3 hit = ro + rd * th;
+		vec3 room_tint = mix(vec3(0.95, 0.86, 0.72), vec3(0.78, 0.84, 0.92), r2);
+		vec3 room;
+		if (th == tb.z) {
+			room = room_tint * 0.85;
+			// Quadro/estante no fundo de algumas salas.
+			room = mix(room, mix(vec3(0.25, 0.32, 0.5), vec3(0.55, 0.3, 0.22), r), step(0.5, r) * step(abs(hit.x - (r - 0.5) * hs.x), hs.x * 0.35) * step(abs(hit.y + 0.1 * hs.y), hs.y * 0.3));
+		} else if (th == tb.y) {
+			room = rd.y < 0.0 ? vec3(0.3, 0.25, 0.2) * (0.8 + 0.4 * r) : vec3(1.1, 1.08, 1.02);
+		} else {
+			room = room_tint * 0.68;
+		}
+		room *= mix(1.0, 0.55, clamp(hit.z / hs.z, 0.0, 1.0));
+		room *= mix(0.45, 1.0, step(1.0 - lit_ratio * 4.0, r));
+		vec3 glass = room * mix(vec3(1.0), glass_color.rgb * 1.8, 0.45);
+		float fres = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 3.0);
+		glass = mix(glass, sky_reflect.rgb, clamp(fres * 0.6 + 0.07, 0.0, 0.65));
+		// Persianas em parte das janelas (faixa clara no topo).
 		float blind = step(0.55, r2) * step(1.0 - (0.25 + 0.5 * r), wy_rel);
 		glass = mix(glass, blind_color.rgb * 0.8, blind * (1.0 - curtain_wall * 0.6));
 		// Caixilho central.

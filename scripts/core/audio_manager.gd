@@ -10,6 +10,8 @@ const BUS_MUSIC := &"Music"
 const BUS_SFX := &"SFX"
 const POOL_SIZE := 12
 const MUSIC_DB := -5.0
+const MUSIC_BUS_DB := -6.0
+const SFX_BUS_DB := -2.0
 const FADE := 0.8
 
 var _pool: Array[AudioStreamPlayer] = []
@@ -31,8 +33,9 @@ var _quit_code := 0
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	get_tree().auto_accept_quit = false
-	_ensure_bus(BUS_MUSIC, -6.0)
-	_ensure_bus(BUS_SFX, -2.0)
+	_ensure_bus(BUS_MUSIC, MUSIC_BUS_DB)
+	_ensure_bus(BUS_SFX, SFX_BUS_DB)
+	load_settings()
 	for i in POOL_SIZE:
 		var p := AudioStreamPlayer.new()
 		p.bus = BUS_SFX
@@ -102,6 +105,7 @@ func quit_clean(code: int = 0) -> void:
 	if _quitting:
 		return
 	_quitting = true
+	KartModel.clear_pool()
 	if _task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
@@ -127,16 +131,16 @@ func _exit_tree() -> void:
 	_streams.clear()
 
 
-static func _wav(bytes: PackedByteArray, loop: bool) -> AudioStreamWAV:
+static func _wav(bytes: PackedByteArray, loop: bool, stereo := false) -> AudioStreamWAV:
 	var w := AudioStreamWAV.new()
 	w.format = AudioStreamWAV.FORMAT_16_BITS
 	w.mix_rate = Synth.RATE
-	w.stereo = false
+	w.stereo = stereo
 	w.data = bytes
 	if loop:
 		w.loop_mode = AudioStreamWAV.LOOP_FORWARD
 		w.loop_begin = 0
-		w.loop_end = bytes.size() >> 1
+		w.loop_end = bytes.size() >> (2 if stereo else 1)
 	return w
 
 
@@ -145,8 +149,8 @@ func _finish_generation() -> void:
 	for k: String in fx:
 		var e: Array = fx[k]
 		_sfx[StringName(k)] = _wav(e[0], e[1])
-	_streams[&"title"] = _wav(_result["title"], true)
-	_streams[&"race"] = _wav(_result["race"], true)
+	_streams[&"title"] = _wav(_result["title"], true, true)
+	_streams[&"race"] = _wav(_result["race"], true, true)
 	_ready_flag = true
 	print("[Audio] músicas e efeitos sintetizados em %d ms (thread)" % int(_result.get("ms", 0)))
 	_result = {}
@@ -250,6 +254,51 @@ func stop_music(fade: float = FADE) -> void:
 
 func current_music() -> StringName:
 	return _music_name if _ready_flag else _pending_music
+
+
+## Volumes escolhidos no menu de pausa (0..1, 1 = padrão do jogo; 0 = mudo), independentes:
+## música (barramento Music) e efeitos sonoros (barramento SFX: efeitos, motores, menus).
+## Aplicados na hora e salvos em `settings_path` (valem entre sessões).
+var music_volume := 1.0
+var sfx_volume := 1.0
+var settings_path := "user://settings.cfg"
+
+
+func set_music_volume(v: float, save := true) -> void:
+	music_volume = clampf(v, 0.0, 1.0)
+	_apply_bus(BUS_MUSIC, MUSIC_BUS_DB, music_volume)
+	if save:
+		save_settings()
+
+
+func set_sfx_volume(v: float, save := true) -> void:
+	sfx_volume = clampf(v, 0.0, 1.0)
+	_apply_bus(BUS_SFX, SFX_BUS_DB, sfx_volume)
+	if save:
+		save_settings()
+
+
+func _apply_bus(bus_name: StringName, base_db: float, linear: float) -> void:
+	var idx := AudioServer.get_bus_index(bus_name)
+	if idx < 0:
+		return
+	AudioServer.set_bus_mute(idx, linear <= 0.001)
+	AudioServer.set_bus_volume_db(idx, base_db + linear_to_db(maxf(linear, 0.0001)))
+
+
+func save_settings() -> void:
+	var cf := ConfigFile.new()
+	cf.load(settings_path)  # preserva outras seções, se houver
+	cf.set_value("audio", "music", music_volume)
+	cf.set_value("audio", "sfx", sfx_volume)
+	cf.save(settings_path)
+
+
+func load_settings() -> void:
+	var cf := ConfigFile.new()
+	var ok := cf.load(settings_path) == OK
+	set_music_volume(float(cf.get_value("audio", "music", 1.0)) if ok else 1.0, false)
+	set_sfx_volume(float(cf.get_value("audio", "sfx", 1.0)) if ok else 1.0, false)
 
 
 func set_bus_volume(bus_name: StringName, linear: float) -> void:

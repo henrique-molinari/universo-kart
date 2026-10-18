@@ -1,11 +1,12 @@
 class_name TitleScreen
 extends Node
 ## Título: câmera sobrevoando a pista em loop (ShowcaseCamera) com a imagem 3D DESFOCADA
-## (shader de blur sobre a textura da tela), logo "UNIVERSO KART" e "Press enter for start" pulsando.
+## (shader de blur sobre a textura da tela), logo "UNIVERSO KART" e "PRESSIONE ENTER OU A PARA COMEÇAR" pulsando.
 ## Enter (teclado) ou A/Start em qualquer controle -> seleção de cor.
 
 const SELECT_SCENE := "res://scenes/select.tscn"
 const BLUR_SHADER := preload("res://assets/shaders/screen_blur.gdshader")
+const LOGO_TITLE := preload("res://assets/branding/universo_kart_logo.png")
 
 var _press: Label
 var _logo_box: Control
@@ -34,30 +35,29 @@ func _ready() -> void:
 	blur.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bm := ShaderMaterial.new()
 	bm.shader = BLUR_SHADER
+	bm.set_shader_parameter(&"tint", Color(0.03, 0.035, 0.05, 0.42))
+	bm.set_shader_parameter(&"vignette", 0.55)
 	blur.material = bm
 	layer.add_child(blur)
 
 	_logo_box = VBoxContainer.new()
 	(_logo_box as VBoxContainer).alignment = BoxContainer.ALIGNMENT_CENTER
 	_logo_box.add_theme_constant_override(&"separation", 6)
-	UiKit.anchor(_logo_box, Control.PRESET_CENTER, Rect2(-700, -300, 1400, 400))
+	UiKit.anchor(_logo_box, Control.PRESET_CENTER, Rect2(-600, -350, 1200, 520))
 	layer.add_child(_logo_box)
-	var top := UiKit.label("UNIVERSO", 150, Palette.YELLOW, 26)
-	top.add_theme_color_override(&"font_outline_color", Color(0.02, 0.04, 0.35))
-	top.add_theme_color_override(&"font_shadow_color", Color(0, 0, 0, 0.45))
-	top.add_theme_constant_override(&"shadow_offset_y", 10)
-	_logo_box.add_child(top)
-	var kart := UiKit.label("KART", 170, Palette.MAGENTA, 28)
-	kart.add_theme_color_override(&"font_outline_color", Palette.WHITE)
-	kart.add_theme_color_override(&"font_shadow_color", Color(0, 0, 0, 0.45))
-	kart.add_theme_constant_override(&"shadow_offset_y", 10)
-	_logo_box.add_child(kart)
+	var title_logo := TextureRect.new()
+	title_logo.texture = LOGO_TITLE
+	title_logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	title_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	title_logo.custom_minimum_size = Vector2(1060, 506)
+	title_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_logo_box.add_child(title_logo)
 	_logo_box.resized.connect(func() -> void: _logo_box.pivot_offset = _logo_box.size * 0.5)
 
-	_press = UiKit.label("Press enter for start", 54, Palette.WHITE, 10)
+	_press = UiKit.label("PRESSIONE  ENTER  OU  A  PARA COMEÇAR", 42, Palette.UI_TEXT, 8)
 	UiKit.anchor(_press, Control.PRESET_CENTER_BOTTOM, Rect2(-600, -250, 1200, 80))
 	layer.add_child(_press)
-	var foot := UiKit.label("Raccons Games - UNIFEOB", 24, Color(1, 1, 1, 0.8), 5)
+	var foot := UiKit.label("Racoons Games - UNIFEOB", 24, Palette.UI_MUTED, 5)
 	UiKit.anchor(foot, Control.PRESET_CENTER_BOTTOM, Rect2(-400, -70, 800, 40))
 	layer.add_child(foot)
 	var logo := UiKit.logo(40.0)
@@ -80,6 +80,9 @@ func _process(delta: float) -> void:
 	_press.scale = Vector2(s, s)
 	if not _leaving and _t > 0.8:
 		_logo_box.rotation = sin(_t * 1.3) * 0.015
+		# Logo pulsando (cresce e diminui), começando do tamanho normal ao fim da entrada.
+		var ls := 1.0 + 0.06 * sin((_t - 0.8) * 2.6)
+		_logo_box.scale = Vector2(ls, ls)
 
 
 func _input(event: InputEvent) -> void:

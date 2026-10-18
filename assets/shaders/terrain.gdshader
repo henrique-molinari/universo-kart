@@ -13,7 +13,7 @@ uniform vec4 sand_color : source_color = vec4(0.86, 0.78, 0.58, 1.0);
 uniform vec4 dirt_color : source_color = vec4(0.55, 0.42, 0.28, 1.0);
 uniform vec4 rock_color : source_color = vec4(0.52, 0.5, 0.47, 1.0);
 uniform float mow_stripe_width = 6.0;
-uniform float mow_strength = 0.07;
+uniform float mow_strength = 0.16;
 uniform sampler2D noise_soft : hint_default_white, filter_linear_mipmap, repeat_enable;
 uniform sampler2D noise_grain : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -49,7 +49,7 @@ void fragment() {
 	float tri = abs(fract(s) - 0.5) * 2.0;
 	float aa = max(fwidth(s) * 2.0, 0.02);
 	float stripe = smoothstep(0.5 - aa, 0.5 + aa, tri);
-	float near_fade = 1.0 - smoothstep(60.0, 160.0, dist);
+	float near_fade = 1.0 - smoothstep(90.0, 230.0, dist);
 	col *= 1.0 + (stripe - 0.5) * 2.0 * mow_strength * COLOR.g * near_fade;
 
 	col = mix(col, dirt_color.rgb * (0.85 + 0.3 * grain), COLOR.b);

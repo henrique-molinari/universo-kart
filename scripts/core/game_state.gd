@@ -12,10 +12,13 @@ const AI_NAMES: Array[String] = ["Turbo", "Faísca", "Cometa", "Nebulosa", "Órb
 
 var num_local_players: int = 1
 var num_ai: int = 4  ## NPCs na corrida (2 humanos + 4 = 6 karts)
-var laps: int = 3
+var laps: int = 1
 var track_scene: String = DEFAULT_TRACK
 var quality: RenderQuality.Preset = RenderQuality.Preset.HIGH
 var players: Array[PlayerConfig] = []
+## "Correr de novo": a próxima corrida reaproveita o mesmo grid de NPCs (e seus modelos do pool).
+var keep_ai_lineup := false
+var _last_ai: Array[PlayerConfig] = []
 
 ## Pista construída uma única vez (na splash) e reaproveitada por título e corrida.
 ## Fica sob este autoload (viewport raiz), então sobrevive às trocas de cena.
@@ -64,6 +67,7 @@ func ensure_track(scenery: bool = true) -> Track:
 	var packed := load(track_scene) as PackedScene
 	track_node = packed.instantiate() as Track
 	track_node.build_scenery = scenery
+	track_node.process_mode = Node.PROCESS_MODE_PAUSABLE  # o autoload é ALWAYS; a pista congela na pausa
 	add_child(track_node)
 	return track_node
 
@@ -79,7 +83,7 @@ func reset_players() -> void:
 		cfg.player_index = i
 		cfg.is_human = true
 		cfg.display_name = "Jogador %d" % (i + 1)
-		# Padrão: P1 magenta, P2 amarelo (piloto sempre da cor do kart).
+		# Padrão: P1 magenta, P2 amarelo (o traje vem do personagem).
 		cfg.color_index = 1 if i == 0 else 2
 		cfg.character = i % 2  # P1 Visitante, P2 Turista
 		cfg.set_color(Palette.SELECT_COLORS[cfg.color_index])
@@ -103,17 +107,37 @@ func set_quality(preset: RenderQuality.Preset) -> void:
 
 ## Gera configurações de IA com cores distintas das dos humanos e os dois ETs alternados.
 func build_ai_configs(count: int) -> Array[PlayerConfig]:
+	if keep_ai_lineup and _last_ai.size() == count:
+		keep_ai_lineup = false
+		return _last_ai
+	keep_ai_lineup = false
+	_last_ai = _build_ai_configs(count)
+	return _last_ai
+
+
+func _build_ai_configs(count: int) -> Array[PlayerConfig]:
 	var used: Array[Color] = []
 	for i in num_local_players:
 		used.append(players[i].kart_color)
 	var result: Array[PlayerConfig] = []
 	var color_idx := 0
+	# Sorteio com RNG próprio (não consome o aleatório global, que os testes deixam determinístico).
+	var pilots := Characters.pilot_ids()
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	for j in range(pilots.size() - 1, 0, -1):
+		var r := rng.randi_range(0, j)
+		var tmp := pilots[j]
+		pilots[j] = pilots[r]
+		pilots[r] = tmp
 	for i in count:
 		var cfg := PlayerConfig.new()
 		cfg.is_human = false
 		cfg.player_index = -1
 		cfg.display_name = AI_NAMES[i % AI_NAMES.size()]
-		cfg.character = i % 2  # NPCs alternam entre os dois ETs
+		# NPCs alternam ET / piloto: os dois ETs e pilotos sorteados (sem repetir) a cada corrida.
+		var pair := int(i * 0.5)
+		cfg.character = pair % 2 if i % 2 == 0 else pilots[pair % pilots.size()]
 		var guard := 0
 		while used.has(Palette.KART_COLORS[color_idx % Palette.KART_COLORS.size()]) and guard < 20:
 			color_idx += 1

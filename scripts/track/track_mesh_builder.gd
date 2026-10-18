@@ -508,10 +508,10 @@ func _build_bridge_supports(root: Node3D) -> void:
 		return
 	var kit := MeshKit.new()
 	var accent := MeshKit.new()
-	var pillar_col := Color(0.9, 0.9, 0.92)
+	var pillar_col := Color(0.84, 0.83, 0.8)
 	var cap_col := Palette.MAGENTA
 	var abut_col := Color(0.76, 0.73, 0.68)
-	var arch_col := Color(0.95, 0.95, 0.97)
+	var arch_col := Color(0.86, 0.85, 0.82)
 	const ABUT_DEPTH := 8.0
 	for span in spans:
 		var o_start := float(span.x) * _step
@@ -579,9 +579,9 @@ func _build_bridge_supports(root: Node3D) -> void:
 				ups.append(Vector3.UP)
 				vs.append(t)
 			kit.extrude(rails, rights, ups, band[0], band[1], arch_col, vs)
-			# Tímpanos: faixa azul nas bordas do arco (leitura do desenho de lado).
-			var edge := _hard_profile(PackedVector2Array([Vector2(half, -0.45), Vector2(half + 0.05, -0.45), Vector2(half + 0.05, 0.45), Vector2(half, 0.45), Vector2(half, -0.45)]))
-			var edge_l := _hard_profile(PackedVector2Array([Vector2(-half - 0.05, -0.45), Vector2(-half, -0.45), Vector2(-half, 0.45), Vector2(-half - 0.05, 0.45), Vector2(-half - 0.05, -0.45)]))
+			# Arquivolta: anel azul saliente nas duas faces do arco (moldura com espessura).
+			var edge := _hard_profile(PackedVector2Array([Vector2(half - 0.02, -0.56), Vector2(half + 0.16, -0.56), Vector2(half + 0.16, 0.7), Vector2(half - 0.02, 0.7), Vector2(half - 0.02, -0.56)]))
+			var edge_l := _hard_profile(PackedVector2Array([Vector2(-half - 0.16, -0.56), Vector2(-half + 0.02, -0.56), Vector2(-half + 0.02, 0.7), Vector2(-half - 0.16, 0.7), Vector2(-half - 0.16, -0.56)]))
 			accent.extrude(rails, rights, ups, edge[0], edge[1], Palette.BLUE, vs)
 			accent.extrude(rails, rights, ups, edge_l[0], edge_l[1], Palette.BLUE, vs)
 		# Cabeceiras chanfradas nas duas pontas.

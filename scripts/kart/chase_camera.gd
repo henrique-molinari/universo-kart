@@ -37,6 +37,20 @@ func _process(delta: float) -> void:
 	var dist := 4.6 + boost * 1.0
 	var want_pos := base - _fwd * dist + up * 1.9
 	var want_look := base + _fwd * 5.0 + up * 0.8
+	var right := _fwd.cross(up).normalized()
+	# Drift: a câmera abre um pouco para fora da curva (mais dinâmica).
+	if kart.drifting:
+		want_pos -= right * kart.drift_dir * 0.7
+	# Introdução durante a contagem: começa de frente (3/4, mostrando o piloto) e gira em arco
+	# até ficar atrás do kart exatamente no "GO" (o tempo da largada não muda).
+	var r := kart.race as Race
+	if r != null and r.state == Race.State.COUNTDOWN:
+		var k := smoothstep(0.0, 1.0, clampf(r.countdown / Race.COUNTDOWN_TIME, 0.0, 1.0))
+		if k > 0.0:
+			var a := k * 2.6
+			var orbit := (-_fwd * cos(a) + right * sin(a)) * lerpf(dist, 3.4, k) + up * lerpf(1.9, 1.25, k)
+			want_pos = base + orbit
+			want_look = want_look.lerp(base + up * 0.95, k)
 	if not _init_done:
 		_pos = want_pos
 		_look = want_look

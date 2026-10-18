@@ -168,6 +168,7 @@ func build(path: TrackPath, site: SiteMap, brand: BrandArt) -> void:
 		par_prev = kit.vertex_count() - 4
 	# Fachadas das bocas (entrada e saída), no plano perpendicular à pista naquela linha.
 	var portal := MeshKit.new()
+	var leds := MeshKit.new()
 	for end: int in [0, 1]:
 		var k := 0 if end == 0 else n_rows - 1
 		var row: Dictionary = rows[k]
@@ -203,9 +204,19 @@ func build(path: TrackPath, site: SiteMap, brand: BrandArt) -> void:
 		var fz := out_n * 0.3
 		# Base destra com +Z para fora da boca (na saída o X inverte, senão o letreiro espelha).
 		var fb := Basis(rf if end == 0 else -rf, Vector3.UP, out_n)
+		# Pilares e verga chanfrados (as bordas arredondadas pegam luz), com barras de LED nos pilares.
+		var pil_h := open_top + 1.2 - (road_y - 1.0)
 		for x: float in [left_in - 0.6, right_in + 0.6]:
-			portal.box(Transform3D(fb, c + rf * x + fz + Vector3(0, (road_y - 1.0 + open_top + 1.2) * 0.5, 0)), Vector3(1.2, open_top + 1.2 - (road_y - 1.0), 0.6), Palette.MAGENTA)
-		portal.box(Transform3D(fb, c + rf * ((left_in + right_in) * 0.5) + fz + Vector3(0, open_top + 0.6, 0)), Vector3(right_in - left_in + 2.4, 1.2, 0.6), Palette.MAGENTA)
+			portal.rounded_prism(Transform3D(fb, c + rf * x + fz + Vector3(0, road_y - 1.0, 0)), 1.2, 0.6, pil_h, 0.14, 3, Palette.MAGENTA, Palette.MAGENTA.lightened(0.1))
+			leds.box(Transform3D(fb, c + rf * x + out_n * 0.62 + Vector3(0, road_y + 0.6 + (pil_h - 2.6) * 0.5, 0)), Vector3(0.14, pil_h - 2.6, 0.04), Color(0.85, 0.93, 1.0))
+		var span := right_in - left_in
+		var mid_x := (left_in + right_in) * 0.5
+		portal.rounded_prism(Transform3D(fb, c + rf * mid_x + fz + Vector3(0, open_top, 0)), span + 2.4, 0.6, 1.2, 0.14, 3, Palette.MAGENTA, Palette.MAGENTA.lightened(0.1))
+		# Marquise saliente acima da boca (branca, borda azul) com faixa de LED na frente.
+		var cz := out_n * 1.35
+		portal.rounded_prism(Transform3D(fb, c + rf * mid_x + cz + Vector3(0, open_top + 1.15, 0)), span + 4.0, 2.7, 0.32, 0.25, 4, Color(0.95, 0.95, 0.96), Color(0.97, 0.97, 0.98), true)
+		portal.rounded_prism(Transform3D(fb, c + rf * mid_x + cz + out_n * 1.36 + Vector3(0, open_top + 1.13, 0)), span + 3.6, 0.1, 0.36, 0.04, 2, Palette.BLUE, Palette.BLUE, true)
+		leds.box(Transform3D(fb, c + rf * mid_x + cz + out_n * 1.2 + Vector3(0, open_top + 1.12, 0)), Vector3(span + 3.2, 0.05, 0.12), Color(0.85, 0.93, 1.0))
 		# Letreiro acima da boca.
 		var w := minf(right_in - left_in, 22.0)
 		var q := QuadMesh.new()
@@ -213,7 +224,7 @@ func build(path: TrackPath, site: SiteMap, brand: BrandArt) -> void:
 		var qmi := MeshInstance3D.new()
 		qmi.mesh = q
 		qmi.material_override = brand.get_material(BrandArt.Design.LOGO_ON_BLUE if end == 0 else BrandArt.Design.TITLE_ON_MAGENTA)
-		qmi.transform = Transform3D(fb, c + rf * ((left_in + right_in) * 0.5) + out_n * 0.65 + Vector3(0, open_top + 1.6 + q.size.y * 0.5, 0))
+		qmi.transform = Transform3D(fb, c + rf * ((left_in + right_in) * 0.5) + out_n * 0.65 + Vector3(0, open_top + 1.8 + q.size.y * 0.5, 0))
 		qmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(qmi)
 	# Equipamentos na cobertura.
@@ -235,4 +246,15 @@ func build(path: TrackPath, site: SiteMap, brand: BrandArt) -> void:
 	pmi.name = "Porticos"
 	pmi.mesh = portal.commit(null, PROPS_MAT)
 	add_child(pmi)
+	# Luzes de entrada do túnel (emissivas: com o bloom, brilham como LED).
+	var led_mat := StandardMaterial3D.new()
+	led_mat.vertex_color_use_as_albedo = true
+	led_mat.emission_enabled = true
+	led_mat.emission = Color(0.85, 0.93, 1.0)
+	led_mat.emission_energy_multiplier = 3.0
+	var portal_leds := MeshInstance3D.new()
+	portal_leds.name = "LuzesPortico"
+	portal_leds.mesh = leds.commit(null, led_mat)
+	portal_leds.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(portal_leds)
 	site.add_blocker(Vector2(mid.x, mid.z), (SIDE_WING * 2.0 + 30.0) * 0.6)

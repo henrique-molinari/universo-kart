@@ -10,6 +10,14 @@ var uvs := PackedVector2Array()
 var colors := PackedColorArray()
 var indices := PackedInt32Array()
 
+## Multiplicador global de resolução das primitivas curvas (segmentos/anéis). Os modelos de
+## kart/piloto o elevam durante a construção (malha mais lisa); o resto do jogo usa 1.
+static var detail := 1.0
+
+
+static func seg_count(n: int) -> int:
+	return maxi(n, roundi(float(n) * detail))
+
 
 func clear() -> void:
 	verts.clear()
@@ -130,7 +138,7 @@ func box(xf: Transform3D, size: Vector3, c: Color) -> void:
 func rounded_prism(xf: Transform3D, width: float, depth: float, height: float, radius: float, segs: int, c_wall: Color, c_top: Color, bottom_cap: bool = false) -> void:
 	var r := minf(radius, minf(width, depth) * 0.5 - 0.001)
 	r = maxf(r, 0.0)
-	var outline := rounded_rect_outline(width, depth, r, segs)
+	var outline := rounded_rect_outline(width, depth, r, seg_count(segs))
 	var nb := xf.basis.inverse().transposed()
 	var n := outline.size()
 	# Paredes.
@@ -196,6 +204,7 @@ func _outline_normal(outline: PackedVector3Array, i: int) -> Vector3:
 
 ## Cilindro/cone (eixo Y local de 0 a h).
 func cylinder(xf: Transform3D, r0: float, r1: float, h: float, segs: int, c: Color, caps: bool = true, c_cap: Color = Color(-1, 0, 0)) -> void:
+	segs = seg_count(segs)
 	var nb := xf.basis.inverse().transposed()
 	var slope := (r0 - r1) / maxf(h, 0.0001)
 	var base_i := verts.size()
@@ -228,6 +237,8 @@ func cylinder(xf: Transform3D, r0: float, r1: float, h: float, segs: int, c: Col
 
 ## Esfera UV com escurecimento opcional na parte de baixo (AO estilizado).
 func sphere(xf: Transform3D, radius: float, rings: int, segs: int, c: Color, ao_bottom: float = 0.0, leaf_alpha: float = -1.0) -> void:
+	rings = seg_count(rings)
+	segs = seg_count(segs)
 	var nb := xf.basis.inverse().transposed()
 	var base_i := verts.size()
 	for r in rings + 1:

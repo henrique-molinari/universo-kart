@@ -28,18 +28,33 @@ static func gradient_bg(center: Color = Color(0.0, 0.11, 0.85), edge: Color = Co
 	return rect
 
 
-static func label(text: String, size_px: int, c: Color = Palette.WHITE, outline: int = -1) -> Label:
+static func label(text: String, size_px: int, c: Color = Palette.UI_TEXT, outline: int = -1) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_override(&"font", FONT)
 	l.add_theme_font_size_override(&"font_size", size_px)
 	l.add_theme_color_override(&"font_color", c)
-	l.add_theme_color_override(&"font_outline_color", Color(0.01, 0.02, 0.18))
+	l.add_theme_color_override(&"font_outline_color", Palette.UI_OUTLINE)
 	l.add_theme_constant_override(&"outline_size", outline if outline >= 0 else maxi(int(size_px / 7.0), 3))
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return l
+
+
+## Painel padrão dos menus: grafite translúcido, borda fina neutra e faixa de acento no topo.
+static func panel_style(accent: Color = Palette.UI_ACCENT, radius: int = 18, margin: int = 40) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Palette.UI_PANEL
+	sb.border_color = accent.darkened(0.15)
+	sb.set_border_width_all(2)
+	sb.border_width_top = 5
+	sb.set_corner_radius_all(radius)
+	sb.set_content_margin_all(margin)
+	sb.shadow_color = Color(0, 0, 0, 0.45)
+	sb.shadow_size = 28
+	sb.shadow_offset = Vector2(0, 10)
+	return sb
 
 
 ## Logo UNIFEOB rasterizado do SVG em alta resolução, recolorido (padrão: branco).

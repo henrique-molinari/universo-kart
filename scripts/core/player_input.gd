@@ -135,6 +135,16 @@ static func confirm(player_index: int) -> bool:
 		or _key(player_index, CONFIRM) > 0.5
 
 
+## Pausa: Start (Menu) do controle ou Esc/P (teclado).
+static func pause(player_index: int) -> bool:
+	return _btn(player_index, JOY_BUTTON_START) or _key(player_index, PAUSE) > 0.5
+
+
+## Confirmar em menus onde Start tem outro papel (menu de pausa): só A (ou teclado).
+static func accept(player_index: int) -> bool:
+	return _btn(player_index, JOY_BUTTON_A) or _key(player_index, CONFIRM) > 0.5
+
+
 ## Compatibilidade com o código antigo (somente teclado).
 static func is_pressed(player_index: int, action_name: String) -> bool:
 	return Input.is_action_pressed(action(player_index, action_name))

@@ -50,3 +50,6 @@ static func apply_global(preset: Preset) -> void:
 	elif preset == Preset.ULTRA:
 		filter = RenderingServer.SHADOW_QUALITY_SOFT_HIGH
 	RenderingServer.directional_soft_shadow_filter_set_quality(filter)
+	# Pele dos ETs (dispersão subsuperficial): poucas amostras bastam para o efeito suave;
+	# qualidade alta só no Ultra (o passe roda por viewport, duas vezes no split-screen).
+	RenderingServer.sub_surface_scattering_set_quality(RenderingServer.SUB_SURFACE_SCATTERING_QUALITY_HIGH if preset == Preset.ULTRA else RenderingServer.SUB_SURFACE_SCATTERING_QUALITY_LOW)

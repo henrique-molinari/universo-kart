@@ -44,6 +44,7 @@ func _ready() -> void:
 		printerr("[gameplay] TIMEOUT")
 		get_tree().quit(3))
 	var packed := load(RACE_SCENE) as PackedScene
+	GameState.laps = 3  # o jogo usa 1 volta; os testes de itens/drift precisam de corrida mais longa
 	race = packed.instantiate() as Race
 	race.build_scenery = false
 	race.autopilot = true
@@ -107,9 +108,9 @@ func _test_wheels() -> void:
 	m.queue_free()
 
 
-## ETs: mãos alcançam o volante (IK) em qualquer esterço, cabem no kart e as poses de vitória/derrota funcionam.
+## ETs e pilotos: mãos alcançam o volante (IK) em qualquer esterço, cabem no kart e as poses de vitória/derrota funcionam.
 func _test_drivers() -> void:
-	for ch in 2:
+	for ch in Characters.count():
 		var m := KartModel.new()
 		var cfg := PlayerConfig.new()
 		cfg.set_color(Palette.BLUE)
@@ -119,15 +120,19 @@ func _test_drivers() -> void:
 		var dr := m.driver
 		var werr := 0.0
 		var gdist := 0.0
+		var clip := ""
 		for st: float in [-1.0, 0.0, 1.0]:
 			for f in 20:
 				m.animate(12.0, st, 1.0 / 60.0, 0.0)
 			werr = maxf(werr, dr.wrist_error)
+			if clip == "":
+				clip = _driver_clip(m)
 			for i in 2:
 				var g := m._grip(-1.0 if i == 0 else 1.0)
 				gdist = maxf(gdist, dr.hands[i].position.distance_to(g))
-		var nm := AlienDriver.NAMES[ch]
+		var nm := Characters.NAMES[ch]
 		_check(werr < 0.005 and gdist < 0.08, "%s: mãos no volante em todo o esterço (IK: erro %.3f m, punho-pega %.3f m)" % [nm, werr, gdist])
+		_check(clip == "", "%s: piloto não atravessa a carenagem %s" % [nm, clip])
 		# Cabe no kart: cabeça acima/atrás do volante, dentro da largura do kart e abaixo de 1,8 m.
 		var hm := dr.head.get_node("HeadMesh") as MeshInstance3D
 		var hb := hm.mesh.get_aabb()
@@ -145,8 +150,13 @@ func _test_drivers() -> void:
 			m.animate(0.0, 0.0, 1.0 / 60.0, 0.0)
 			max_hop = maxf(max_hop, dr.hop)
 		var hand_up := dr.hands[0].position.y > dr.head.position.y - 0.05 and dr.hands[1].position.y > dr.head.position.y - 0.05
-		_check(dr.v_amount > 0.99 and max_hop > 0.05 and hand_up and (dr.fingers[1][0] as Node3D).basis.x.x < 0.999,
-			"%s: vitória com pulinhos e sinal de paz nas duas mãos (pulo %.2f m)" % [nm, max_hop])
+		if dr is PilotDriver:  # pilotos e astronauta
+			var point := (dr.fingers[1][0] as Node3D).basis.y.y > 0.95 and (dr.fingers[0][0] as Node3D).basis.y.y < 0.2
+			_check(dr is PilotDriver and dr.v_amount > 0.99 and max_hop > 0.05 and hand_up and point and dr._fx != null,
+				"%s: vitória com socos no ar, \"nº 1\" na direita e confete (quique %.2f m)" % [nm, max_hop])
+		else:
+			_check(dr.v_amount > 0.99 and max_hop > 0.05 and hand_up and (dr.fingers[1][0] as Node3D).basis.x.x < 0.999,
+				"%s: vitória com pulinhos e sinal de paz nas duas mãos (pulo %.2f m)" % [nm, max_hop])
 		m.set_pose(AlienDriver.Pose.DEFEAT)
 		var yaw_min := 0.0
 		var yaw_max := 0.0
@@ -154,8 +164,27 @@ func _test_drivers() -> void:
 			m.animate(0.0, 0.0, 1.0 / 60.0, 0.0)
 			yaw_min = minf(yaw_min, dr.head.rotation.y)
 			yaw_max = maxf(yaw_max, dr.head.rotation.y)
-		_check(dr.head_pitch < -0.35 and yaw_max - yaw_min > 0.4, "%s: derrota com cabeça baixa balançando" % nm)
+		if dr is PilotDriver:
+			var on_helmet := dr.hands[0].position.y > dr.head.position.y + 0.15 and dr.hands[1].position.y > dr.head.position.y + 0.15
+			_check(dr.head_pitch < -0.35 and on_helmet and dr.wrist_error < 0.005, "%s: derrota com mãos no capacete e cabeça baixa" % nm)
+		else:
+			_check(dr.head_pitch < -0.35 and yaw_max - yaw_min > 0.4, "%s: derrota com cabeça baixa balançando" % nm)
 		m.queue_free()
+
+
+## Primeiro vértice do piloto dentro de um volume da carenagem ("" = nenhum).
+func _driver_clip(m: KartModel) -> String:
+	var inv := m.tilt_root.global_transform.affine_inverse()
+	for node in m.driver.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		var xf := inv * mi.global_transform
+		for si in mi.mesh.get_surface_count():
+			var vs: PackedVector3Array = mi.mesh.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]
+			for j in range(0, vs.size(), 2):
+				var hit := m.inside_body(xf * vs[j], 0.01)
+				if hit != "":
+					return "(%s em %s, %s)" % [mi.name, hit, str(xf * vs[j])]
+	return ""
 
 
 func _check(ok: bool, msg: String) -> void:
@@ -240,6 +269,7 @@ func _physics_process(delta: float) -> void:
 	_event(34.0, "rocket", _test_rocket)
 	_event(48.0, "shield_rocket", _test_shield_rocket)
 	_event(56.0, "pulse", _test_pulse)
+	_event(64.0, "kart_collision", _test_kart_collision)
 	# Drift real (piloto automático com drift) no P2 durante a 2ª volta: turbos por nível + física intacta.
 	if t >= 60.0 and not _events_done.has("drift_on"):
 		_events_done["drift_on"] = true
@@ -265,7 +295,7 @@ func _test_turbo() -> void:
 
 func _banana_ahead(k: Kart) -> Area3D:
 	var tp := race.tp
-	var off := k.track_offset + 14.0
+	var off := k.track_offset + 8.0  # perto: menos chance de um NPC cruzar e pegar a casca antes
 	var lat := tp.get_lateral(k.global_position, k.track_offset)
 	var b := RaceObjects.make_banana(tp.to_world(off, lat, 0.0), tp.get_up(off), null)
 	race.objects_root.add_child(b)
@@ -282,6 +312,9 @@ func _test_banana() -> void:
 	k.shield_time = 0.0
 	k.invuln_time = 0.0
 	var h0: int = k.stats["hits"]
+	var hits0: Array[int] = []
+	for kk in race.karts:
+		hits0.append(kk.stats["hits"])
 	_spin_seen = false
 	var dropper := race.karts[0]
 	var n0 := race.objects_root.get_child_count()
@@ -290,7 +323,11 @@ func _test_banana() -> void:
 	_check(race.objects_root.get_child_count() == n0 + 1, "usar BANANA larga uma casca atrás do kart")
 	var bid := _banana_ahead(k).get_instance_id()
 	_later(2.0, func() -> void:
-		_check(k.stats["hits"] == h0 + 1 and _spin_seen, "banana derruba o kart (rodopio + perde velocidade)")
+		var who: Array[String] = []
+		for j in race.karts.size():
+			if race.karts[j].stats["hits"] != hits0[j]:
+				who.append(race.racer_name(j))
+		_check(k.stats["hits"] == h0 + 1 and _spin_seen, "banana derruba o kart (rodopio + perde velocidade) — atingidos: %s" % str(who))
 		_check(not is_instance_id_valid(bid), "banana some após atingir"))
 
 
@@ -359,7 +396,9 @@ func _test_start_boost() -> void:
 	var ok: bool = k0.stats["start_boost"] == 1 and race.karts[1].stats["start_boost"] == 1 and race.karts[4].stats["start_boost"] == 1
 	_check(ok, "largada com boost para quem acelerou desde o 3 (P1, P2 e NPC)")
 	_check(late.stats["start_boost"] == 0, "sem boost para quem acelerou tarde (NPC)")
-	_check(k0.speed > 15.0 and late.speed < 12.0, "boost de largada acelera: %.1f m/s x %.1f m/s sem boost" % [k0.speed, late.speed])
+	# Quem largou sem boost pode ser empurrado por quem vem de trás com boost (contato macio na largada).
+	_check(k0.speed > 15.0 and (late.speed < 12.0 or late.speed < k0.speed - 8.0 or late.stats["bumps"] > 0),
+		"boost de largada acelera: %.1f m/s x %.1f m/s sem boost%s" % [k0.speed, late.speed, " (empurrado por trás)" if late.stats["bumps"] > 0 else ""])
 
 
 ## Pulso UNIFEOB: o último usa; todos à frente ficam eletrizados/lentos, exceto quem tem escudo.
@@ -564,6 +603,55 @@ func _test_drift_levels() -> void:
 	k._end_drift(true)
 	ok = ok and k.boost_time == 0.0
 	_check(ok, "drift: turbo por nível 1/2/3 = %s s (nível 0 não dá turbo)" % ", ".join(got))
+	_check(Kart.DRIFT_LEVEL_CHARGE[1] <= 0.5 and Kart.DRIFT_LEVEL_CHARGE[3] <= 1.8,
+		"drift: mini-turbo mais rápido (níveis em %.1f / %.1f / %.1f s de derrapagem)" % [Kart.DRIFT_LEVEL_CHARGE[1], Kart.DRIFT_LEVEL_CHARGE[2], Kart.DRIFT_LEVEL_CHARGE[3]])
+
+
+## Colisão kart-contra-kart pela carroceria: (1) sobrepostos lado a lado se separam sem grudar;
+## (2) trombada por trás a 20 m/s empurra o da frente, o de trás perde velocidade, ninguém atravessa
+## o outro nem é lançado para fora da pista.
+func _test_kart_collision() -> void:
+	var a := race.karts[0]
+	var b := race.karts[1]
+	for k in race.karts:
+		_saved.append([k.track_offset, race.tp.get_lateral(k.global_position, k.track_offset)])
+	var was_drift := b.autopilot_drift
+	b.autopilot_drift = false
+	var o := _find_straight(a.track_offset + 30.0)
+	for tries in 6:
+		if not _npc_near(o):
+			break
+		o = _find_straight(o + 70.0)
+	_freeze(true)
+	var bumps0: int = a.stats["bumps"] + b.stats["bumps"]
+	_teleport(a, o, -0.55)
+	_teleport(b, o, 0.55)
+	var tp := race.tp
+	_later(0.7, func() -> void:
+		var ov := Kart.body_overlap(a, b).length()
+		var sep := absf(tp.get_lateral(a.global_position, a.track_offset) - tp.get_lateral(b.global_position, b.track_offset))
+		_check(ov < 0.03 and sep > 1.9 and sep < 3.2 and a.stats["bumps"] + b.stats["bumps"] == bumps0,
+			"karts sobrepostos lado a lado se separam pela carroceria, sem grudar (%.2f m entre centros, sobra %.3f m, trombadas %d)" % [sep, ov, a.stats["bumps"] + b.stats["bumps"] - bumps0])
+		_teleport(a, o + 4.0, 0.0)
+		_teleport(b, o + 16.0, 0.0))
+	_later(1.3, func() -> void:
+		a.linear_velocity = a._flat_forward() * 20.0)
+	var b0 := [0.0, 0]
+	_later(1.25, func() -> void:
+		b0[0] = b.track_offset
+		b0[1] = b.stats["bumps"])
+	_later(2.6, func() -> void:
+		var pushed := tp.delta_offset(b0[0], b.track_offset)
+		var behind := tp.delta_offset(a.track_offset, b.track_offset)
+		var ov := Kart.body_overlap(a, b).length()
+		var ok_h := true
+		for k: Kart in [a, b]:
+			ok_h = ok_h and absf(k.global_position.y - tp.get_height(k.track_offset)) < 1.6 \
+				and absf(tp.get_lateral(k.global_position, k.track_offset)) < tp.get_wall_lateral(k.track_offset, 1) + 0.3
+		_check(b.stats["bumps"] > b0[1] and pushed > 2.0 and behind > 2.0 and ov < 0.05 and ok_h,
+			"trombada por trás a 20 m/s: da frente empurrado %.1f m, de trás continua atrás (%.1f m), sem atravessar nem ser lançado" % [pushed, behind])
+		b.autopilot_drift = was_drift
+		_restore())
 
 
 func _on_finished() -> void:
@@ -617,7 +705,8 @@ func _on_finished() -> void:
 	var chars: Array[int] = []
 	for i in range(2, race.karts.size()):
 		chars.append(race.karts[i].model.character)
-	_check(chars.count(0) == 2 and chars.count(1) == 2, "NPCs usam os dois ETs %s" % str(chars))
+	_check(chars.count(0) == 1 and chars.count(1) == 1 and chars.filter(func(c: int) -> bool: return Characters.is_pilot(c)).size() == 2,
+		"NPCs usam os dois ETs e dois pilotos %s" % str(chars))
 	_check(race.celebration_played and _celeb_ok and _celeb_frames >= int(Race.CELEBRATION_TIME * 60.0) - 5 and _celeb_speed < 0.5,
 		"comemoração tocou antes do resultado (%d quadros, 1º vitória / demais derrota, karts parados)" % _celeb_frames)
 	for key: String in ["turbo", "banana", "shield_banana", "rocket", "shield_rocket", "drift_levels", "start", "pulse"]:

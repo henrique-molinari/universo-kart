@@ -34,6 +34,11 @@ void fragment() {
 	float jy = abs(fract(wp.y / joint_spacing) - 0.5) * 2.0;
 	float line = smoothstep(0.93, 0.985, jy) * vert;
 	col *= 1.0 - line * joint_strength;
+	// Envelhecimento: escorridos de chuva verticais (só faces verticais) e variação de tom maior.
+	float streak = texture(noise_soft, vec2((wp.x + wp.z) * 0.35, wp.y * 0.025)).r;
+	float drip = smoothstep(0.55, 0.85, streak) * vert;
+	col *= 1.0 - drip * 0.16;
+	col *= 0.95 + 0.1 * texture(noise_soft, (wp.xz + wp.yy * 0.7) * 0.015).r;
 	ALBEDO = col;
 	ROUGHNESS = 0.82 - grain * 0.1;
 	SPECULAR = 0.3;

@@ -4,3 +4,7 @@
 
 # Overrides locais (ex.: tools/strict_warnings.cfg)
 /override.cfg
+
+# Builds exportadas (o .exe passa de 100 MB)
+*.exe
+*.pck

@@ -8,6 +8,7 @@ extends Node
 ##   --autopilot            karts dirigidos pelo piloto automático
 ##   --shot=<arquivo.png>   salva a tela após --shot-time segundos de corrida e sai
 ##   --shot-time=<s>        (padrão 6)
+##   --pause-shot           a captura é feita com o menu de pausa aberto
 ##   --closeup              câmera de perto no P1 (com drift automático); a captura espera um drift nível 2+
 ##   --celebrate=<i>        encerra a corrida logo após a largada com o kart <i> em 1º (captura da comemoração;
 ##                          a captura sai em --shot-time segundos de comemoração)
@@ -19,6 +20,9 @@ signal race_finished
 enum State { COUNTDOWN, RACING, CELEBRATION, RESULTS }
 
 const COUNTDOWN_TIME := 3.0
+## Largada: nos primeiros segundos o pelotão está colado (e quem pega o boost alcança o da frente);
+## trombadas aqui são macias (empurra junto, sem quicar/tremer), senão o kart dá um tranco no começo.
+const START_SOFT_TIME := 2.5
 const CP_WINDOW := 35.0
 ## Comemoração antes do resultado: plano 1 (cada tela mostra o próprio ET) e plano 2 (as duas mostram o vencedor).
 const CELEBRATION_TIME := 6.0
@@ -64,6 +68,7 @@ var _demo_items := PackedStringArray()  ## captura do HUD: itens fixos (índices
 var _closeup_both := false  ## --closeup-still também no P2 (captura dos dois karts)
 var _closeup_cam2: Camera3D
 var _cam_view := ""  ## --closeup: front | side | top | (padrão 3/4)
+var _pause_shot := false
 var _closeup_still := false  ## captura do kart parado (3/4 de frente) durante a contagem
 var _closeup_cam: Camera3D
 var _last_lap_music := false
@@ -76,6 +81,9 @@ var winner := -1
 var _celebrate_force := -1
 var _celeb_cams: Array[Camera3D] = []
 var _celeb_labels: Array[Label] = []
+var _rim_lights: Array[OmniLight3D] = []
+var pause_menu: PauseMenu = null
+var _pause_prev := [true, true]
 
 
 func _ready() -> void:
@@ -96,11 +104,14 @@ func _ready() -> void:
 			_cam_view = a.substr(6)
 		elif a.begins_with("--celebrate="):
 			_celebrate_force = a.substr(12).to_int()
+		elif a == "--pause-shot":
+			_pause_shot = true
 		elif a == "--closeup-still":
 			_closeup = true
 			_closeup_still = true
 	GameState.num_local_players = 2
 	laps = GameState.laps
+	SceneRouter.scene_leaving.connect(_on_scene_leaving)
 	PlayerInput.refresh()
 	Input.joy_connection_changed.connect(_on_joy_changed)
 
@@ -118,6 +129,7 @@ func _ready() -> void:
 	var ai_cfgs := GameState.build_ai_configs(GameState.num_ai)
 	var total := human_count + ai_cfgs.size()
 	var seed_base := randi()
+	var t_build := Time.get_ticks_msec()
 	for i in total:
 		var human := i < human_count
 		var cfg: PlayerConfig = GameState.get_player(i) if human else ai_cfgs[i - human_count]
@@ -135,6 +147,7 @@ func _ready() -> void:
 		karts.append(k)
 		data.append({"next": 0, "lap": 0, "count": 0, "finish_time": 0.0, "place": i + 1, "forced": false})
 		_order.append(i)
+	print("[Race] %d karts prontos em %d ms" % [total, Time.get_ticks_msec() - t_build])
 	_start_hold.resize(total)
 	_prog.resize(total)
 
@@ -216,6 +229,7 @@ func _build_split_screen() -> void:
 		var hud := PlayerHud.new()
 		vp.add_child(hud)
 		hud.build(karts[i], karts.size())
+		hud.setup_minimap(tp, karts)
 		cams.append(cam)
 		huds.append(hud)
 		viewports.append(vp)
@@ -230,11 +244,19 @@ func _build_split_screen() -> void:
 func _process(delta: float) -> void:
 	if karts.is_empty():
 		return
+	var bob_t := Time.get_ticks_msec() * 0.001
 	for box in item_boxes:
 		var s := box.get_node("Spin") as Node3D
 		s.rotate_y(delta * 1.6)
+		s.position.y = sin(bob_t * 2.2 + float(box.get_instance_id() % 13)) * 0.14  # flutua (só visual)
 	for i in huds.size():
 		huds[i].update_hud(data[i]["lap"], laps, data[i]["place"])
+	if state == State.COUNTDOWN or state == State.RACING:
+		for i in 2:
+			var p := PlayerInput.pause(i)
+			if p and not _pause_prev[i] and pause_menu == null:
+				open_pause()
+			_pause_prev[i] = p
 	for ci in 2:
 		var ccam := _closeup_cam if ci == 0 else _closeup_cam2
 		if ccam == null:
@@ -253,6 +275,7 @@ func _process(delta: float) -> void:
 		ccam.global_transform = Transform3D(Basis.looking_at(kx.origin + kx.basis.y * 0.4 - eye, up), eye)
 	if state == State.CELEBRATION or state == State.RESULTS:
 		_update_celebration(delta)
+	_update_rim_lights()
 	if state == State.CELEBRATION:
 		for i in 2:
 			var c := PlayerInput.confirm(i)
@@ -281,7 +304,13 @@ func _process(delta: float) -> void:
 		shot_ready = state == State.COUNTDOWN and countdown < 1.2
 	if _celebrate_force >= 0:
 		shot_ready = state == State.CELEBRATION and celebration_time >= _shot_time
-	if _shot_path != "" and shot_ready:
+	if _shot_path != "" and shot_ready and _pause_shot:
+		_pause_shot = false
+		open_pause()
+		get_tree().create_timer(0.5, true).timeout.connect(func() -> void:
+			get_viewport().get_texture().get_image().save_png(_shot_path)
+			AudioManager.quit_clean(0))
+	elif _shot_path != "" and shot_ready and pause_menu == null:
 		var img := get_viewport().get_texture().get_image()
 		img.save_png(_shot_path)
 		print("[Race] captura salva: %s" % _shot_path)
@@ -314,6 +343,8 @@ func _physics_process(delta: float) -> void:
 					h.show_message("GO!", "", 0.8)
 				AudioManager.sfx(&"go")
 		State.RACING, State.CELEBRATION, State.RESULTS:
+			if state == State.RACING:
+				_resolve_kart_contacts()
 			race_time += delta
 			if _celebrate_force >= 0 and state == State.RACING and race_time > 0.6:
 				_force_finish(_celebrate_force)
@@ -404,6 +435,20 @@ func _finish(i: int, time: float = -1.0) -> void:
 	print("[Race] %s terminou em %dº (%s)%s" % [racer_name(i), finish_count, format_time(time), " (estimado)" if d["forced"] else ""])
 	if finish_count >= karts.size():
 		_start_celebration()
+	elif finish_count == 1 and state == State.RACING and _celebrate_force < 0 and end_when_humans_done:
+		_finish_rest_estimated()
+
+
+## Primeiro kart cruzou a linha: os demais recebem colocação/tempo estimados (~21 m/s) e a
+## comemoração do vencedor abre na hora.
+func _finish_rest_estimated() -> void:
+	var total_len := tp.length * laps + tp.length / float(cps.size())
+	for i in _order.duplicate():
+		if karts[i].finished:
+			continue
+		data[i]["forced"] = true
+		var remain := maxf(total_len - _prog[i], 0.0)
+		_finish(i, race_time + remain / 21.0)
 
 
 ## Captura/teste: encerra a corrida já com o kart `first` em 1º e os demais na ordem atual.
@@ -437,10 +482,16 @@ func _start_celebration() -> void:
 		var cam := Camera3D.new()
 		cam.fov = 40.0
 		cam.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		# Profundidade de campo sutil: o fundo desfoca atrás do personagem em foco.
+		var attr := CameraAttributesPractical.new()
+		attr.dof_blur_far_enabled = true
+		attr.dof_blur_far_transition = 7.0
+		attr.dof_blur_amount = 0.07
+		cam.attributes = attr
 		viewports[i].add_child(cam)
 		cam.current = true
 		_celeb_cams.append(cam)
-		var l := UiKit.label("", 64, Palette.YELLOW, 12)
+		var l := UiKit.label("", 64, Palette.UI_ACCENT, 12)
 		l.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
 		l.offset_top = 18.0
 		l.offset_bottom = 100.0
@@ -448,7 +499,7 @@ func _start_celebration() -> void:
 		viewports[i].add_child(l)
 		_celeb_labels.append(l)
 	AudioManager.sfx(&"lastlap")
-	print("[Race] comemoração: %s venceu (%s)" % [racer_name(winner), AlienDriver.NAMES[karts[winner].model.character]])
+	print("[Race] comemoração: %s venceu (%s)" % [racer_name(winner), Characters.NAMES[karts[winner].model.character]])
 	_update_celebration(0.0)
 
 
@@ -474,19 +525,105 @@ func _update_celebration(delta: float) -> void:
 			off = Vector3(sin(a) * 4.2, 2.1, -cos(a) * 4.2)
 			look_h = 0.8
 		var eye := kx.origin + kx.basis * off
+		(_celeb_cams[i].attributes as CameraAttributesPractical).dof_blur_far_distance = off.length() + 2.5
 		_celeb_cams[i].global_transform = Transform3D(Basis.looking_at(kx.origin + kx.basis.y * look_h - eye, kx.basis.y), eye)
 		var l := _celeb_labels[i]
 		if shot2:
 			l.text = "VENCEDOR: %s" % racer_name(winner)
-			l.add_theme_color_override(&"font_color", Palette.YELLOW)
+			l.add_theme_color_override(&"font_color", Palette.UI_ACCENT)
 		elif target == winner:
 			l.text = "VITÓRIA!"
-			l.add_theme_color_override(&"font_color", Palette.YELLOW)
+			l.add_theme_color_override(&"font_color", Palette.UI_ACCENT)
 		else:
 			l.text = "%dº LUGAR" % int(data[target]["place"])
-			l.add_theme_color_override(&"font_color", Palette.WHITE)
+			l.add_theme_color_override(&"font_color", Palette.UI_TEXT)
 	if state == State.CELEBRATION and t >= CELEBRATION_TIME:
 		_show_results()
+
+
+## Colisão kart-contra-kart pela carroceria real (Kart.body_overlap): separa os dois (metade cada) e
+## troca impulso na direção do contato (restituição + empurrão mínimo ao se aproximarem), com perda de
+## controle momentânea proporcional à força da batida. Correção limitada: ninguém é lançado longe.
+func _resolve_kart_contacts() -> void:
+	for i in karts.size():
+		var a := karts[i]
+		for j in range(i + 1, karts.size()):
+			var b := karts[j]
+			var dpos := a.global_position - b.global_position
+			if absf(dpos.y) > 1.2 or dpos.x * dpos.x + dpos.z * dpos.z > 13.0:
+				continue
+			if a._pending_teleport != null or b._pending_teleport != null:
+				continue
+			var o := Kart.body_overlap(a, b)
+			if o == Vector2.ZERO:
+				continue
+			var depth := o.length()
+			var n := Vector3(o.x, 0.0, o.y) / depth
+			var corr := n * minf(depth, 0.4) * 0.5
+			var vrel := (a.linear_velocity - b.linear_velocity).dot(n)
+			var imp := 0.0
+			var strength := clampf(-vrel / 12.0, 0.0, 1.0)
+			if race_time < START_SOFT_TIME:
+				imp = maxf(-vrel * 0.5, 0.0) * 0.2  # inelástica e diluída em alguns frames: empurra sem tranco
+				strength = 0.0
+			elif vrel < -0.3:
+				imp = maxf(-vrel * (1.0 + Kart.BUMP_RESTITUTION) * 0.5, Kart.BUMP_MIN_PUSH)
+			a.bump(n * imp, corr, strength)
+			b.bump(-n * imp, -corr, strength)
+
+
+## Luz de contorno (rim light) no personagem em destaque na introdução (contagem) e na comemoração:
+## atrás dele em relação à câmera de cada tela, só nas malhas dos karts (KartModel.RIM_LAYER).
+## Some suavemente perto do "GO" (na corrida não há luz extra: FPS do split-screen intacto).
+func _update_rim_lights() -> void:
+	var on := state != State.RACING
+	for i in viewports.size():
+		if _rim_lights.size() <= i:
+			var l := OmniLight3D.new()
+			l.omni_range = 2.6
+			l.omni_attenuation = 1.2
+			l.light_color = Color(0.88, 0.93, 1.0)
+			l.light_cull_mask = KartModel.RIM_LAYER
+			l.shadow_enabled = false
+			add_child(l)
+			_rim_lights.append(l)
+		var rl := _rim_lights[i]
+		var cam := viewports[i].get_camera_3d()
+		rl.visible = on and cam != null
+		if not rl.visible:
+			continue
+		var target := i
+		if state != State.COUNTDOWN and celebration_time >= CELEBRATION_SHOT2:
+			target = winner
+		var kx := karts[target].model.get_global_transform_interpolated()
+		var head := kx.origin + kx.basis.y * 1.15
+		var away := head - cam.global_position
+		away.y = 0.0
+		rl.global_position = head + away.normalized() * 1.1 + Vector3.UP * 0.75
+		rl.light_energy = 4.0 * (clampf(countdown / 0.6, 0.0, 1.0) if state == State.COUNTDOWN else 1.0)
+
+
+## Pausa tudo (árvore pausada) e abre o menu de pausa; o menu despausa ao fechar.
+func open_pause() -> void:
+	AudioManager.sfx(&"confirm")
+	pause_menu = PauseMenu.new()
+	add_child(pause_menu)
+	pause_menu.closed.connect(_on_pause_closed)
+	get_tree().paused = true
+
+
+func _on_pause_closed() -> void:
+	pause_menu = null
+	_pause_prev = [true, true]  # o botão que fechou ainda está pressionado
+
+
+## Saindo da corrida: devolve os modelos ao pool; "correr de novo" mantém o mesmo grid de NPCs
+## (mesmos modelos, reaproveitados sem montar de novo).
+func _on_scene_leaving(path: String) -> void:
+	GameState.keep_ai_lineup = path == RACE_SCENE
+	for k in karts:
+		if is_instance_valid(k) and is_instance_valid(k.model):
+			k.model.release()
 
 
 func racer_name(i: int) -> String:
@@ -497,12 +634,7 @@ func _show_results() -> void:
 	state = State.RESULTS
 	_confirm_prev = [true, true]
 	var panel := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.02, 0.05, 0.3, 0.9)
-	sb.border_color = Palette.YELLOW
-	sb.set_border_width_all(4)
-	sb.set_corner_radius_all(24)
-	sb.set_content_margin_all(40)
+	var sb := UiKit.panel_style(Palette.UI_ACCENT, 18, 40)
 	panel.add_theme_stylebox_override(&"panel", sb)
 	panel.set_anchors_preset(Control.PRESET_CENTER)
 	_results.add_child(panel)
@@ -514,12 +646,12 @@ func _show_results() -> void:
 	for i in karts.size():
 		idx.append(i)
 	idx.sort_custom(func(a: int, b: int) -> bool: return data[a]["place"] < data[b]["place"])
-	var colors: Array[Color] = [Palette.YELLOW]
+	var colors: Array[Color] = [Palette.UI_TEXT]
 	for i in idx:
 		lines.append("%dº  %s   %s" % [data[i]["place"], racer_name(i), format_time(data[i]["finish_time"])])
-		colors.append(Palette.WHITE if karts[i].ai == null else Color(0.75, 0.8, 0.95))
+		colors.append((Palette.UI_ACCENT if data[i]["place"] == 1 else Palette.UI_TEXT) if karts[i].ai == null else Palette.UI_MUTED)
 	lines.append("A: correr de novo    B: voltar à seleção")
-	colors.append(Palette.WHITE)
+	colors.append(Palette.UI_MUTED)
 	var row_px := 44 if karts.size() <= 4 else 34
 	v.add_theme_constant_override(&"separation", 16 if karts.size() <= 4 else 8)
 	for j in lines.size():
