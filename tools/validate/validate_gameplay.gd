@@ -33,6 +33,10 @@ var _saved: Array = []
 var _rockets := {}
 
 
+var _celeb_frames := 0
+var _celeb_ok := false
+var _celeb_speed := 0.0
+
 func _ready() -> void:
 	get_tree().create_timer(900.0, true, true, true).timeout.connect(func() -> void:
 		if _done:
@@ -61,6 +65,7 @@ func _ready() -> void:
 	race.karts[4].ai.start_press = 2.95
 	race.karts[5].ai.start_press = 1.0
 	_test_wheels()
+	_test_drivers()
 	_pads = race.tp.get_boost_pads()
 
 
@@ -102,6 +107,57 @@ func _test_wheels() -> void:
 	m.queue_free()
 
 
+## ETs: mãos alcançam o volante (IK) em qualquer esterço, cabem no kart e as poses de vitória/derrota funcionam.
+func _test_drivers() -> void:
+	for ch in 2:
+		var m := KartModel.new()
+		var cfg := PlayerConfig.new()
+		cfg.set_color(Palette.BLUE)
+		cfg.character = ch
+		m.build(cfg)
+		add_child(m)
+		var dr := m.driver
+		var werr := 0.0
+		var gdist := 0.0
+		for st: float in [-1.0, 0.0, 1.0]:
+			for f in 20:
+				m.animate(12.0, st, 1.0 / 60.0, 0.0)
+			werr = maxf(werr, dr.wrist_error)
+			for i in 2:
+				var g := m._grip(-1.0 if i == 0 else 1.0)
+				gdist = maxf(gdist, dr.hands[i].position.distance_to(g))
+		var nm := AlienDriver.NAMES[ch]
+		_check(werr < 0.005 and gdist < 0.08, "%s: mãos no volante em todo o esterço (IK: erro %.3f m, punho-pega %.3f m)" % [nm, werr, gdist])
+		# Cabe no kart: cabeça acima/atrás do volante, dentro da largura do kart e abaixo de 1,8 m.
+		var hm := dr.head.get_node("HeadMesh") as MeshInstance3D
+		var hb := hm.mesh.get_aabb()
+		var hx := m.tilt_root.transform.affine_inverse() * dr.head.global_transform
+		var head_box := AABB()
+		for c in 8:
+			var p: Vector3 = (m.global_transform.affine_inverse() * dr.head.global_transform) * hb.get_endpoint(c)
+			head_box = AABB(p, Vector3.ZERO) if c == 0 else head_box.expand(p)
+		var sw := m.steering_wheel.position
+		_check(head_box.end.y < 1.8 and head_box.size.x < 0.8 and head_box.position.z > sw.z + 0.13 and hx.origin.y > 0.0,
+			"%s: cabeça cabe no kart (topo %.2f m, largura %.2f, frente z %.2f vs volante %.2f)" % [nm, head_box.end.y, head_box.size.x, head_box.position.z, sw.z])
+		m.set_pose(AlienDriver.Pose.VICTORY)
+		var max_hop := 0.0
+		for f in 90:
+			m.animate(0.0, 0.0, 1.0 / 60.0, 0.0)
+			max_hop = maxf(max_hop, dr.hop)
+		var hand_up := dr.hands[0].position.y > dr.head.position.y - 0.05 and dr.hands[1].position.y > dr.head.position.y - 0.05
+		_check(dr.v_amount > 0.99 and max_hop > 0.05 and hand_up and (dr.fingers[1][0] as Node3D).basis.x.x < 0.999,
+			"%s: vitória com pulinhos e sinal de paz nas duas mãos (pulo %.2f m)" % [nm, max_hop])
+		m.set_pose(AlienDriver.Pose.DEFEAT)
+		var yaw_min := 0.0
+		var yaw_max := 0.0
+		for f in 90:
+			m.animate(0.0, 0.0, 1.0 / 60.0, 0.0)
+			yaw_min = minf(yaw_min, dr.head.rotation.y)
+			yaw_max = maxf(yaw_max, dr.head.rotation.y)
+		_check(dr.head_pitch < -0.35 and yaw_max - yaw_min > 0.4, "%s: derrota com cabeça baixa balançando" % nm)
+		m.queue_free()
+
+
 func _check(ok: bool, msg: String) -> void:
 	_checks += 1
 	if ok:
@@ -116,6 +172,14 @@ func _later(dt: float, fn: Callable) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if race != null and race.state == Race.State.CELEBRATION:
+		_celeb_frames += 1
+		if _celeb_frames == 1:
+			_celeb_ok = race.winner >= 0 and not race._results.visible
+			for i in race.karts.size():
+				var want := AlienDriver.Pose.VICTORY if i == race.winner else AlienDriver.Pose.DEFEAT
+				_celeb_ok = _celeb_ok and race.karts[i].model.driver.pose == want
+		_celeb_speed = maxf(_celeb_speed, absf(race.karts[race.winner].speed) if _celeb_frames > 10 else 0.0)
 	if race != null and race.karts.size() >= 6 and race.state == Race.State.RACING and not _events_done.has("start"):
 		_events_done["start"] = true
 		_later(0.55, _test_start_boost)
@@ -550,6 +614,12 @@ func _on_finished() -> void:
 	for i in race.karts.size():
 		if race.data[i]["place"] == 1:
 			print("[gameplay] vencedor: %s" % race.racer_name(i))
+	var chars: Array[int] = []
+	for i in range(2, race.karts.size()):
+		chars.append(race.karts[i].model.character)
+	_check(chars.count(0) == 2 and chars.count(1) == 2, "NPCs usam os dois ETs %s" % str(chars))
+	_check(race.celebration_played and _celeb_ok and _celeb_frames >= int(Race.CELEBRATION_TIME * 60.0) - 5 and _celeb_speed < 0.5,
+		"comemoração tocou antes do resultado (%d quadros, 1º vitória / demais derrota, karts parados)" % _celeb_frames)
 	for key: String in ["turbo", "banana", "shield_banana", "rocket", "shield_rocket", "drift_levels", "start", "pulse"]:
 		_check(_events_done.has(key), "evento '%s' executado" % key)
 	var used := [0, 0, 0, 0, 0, 0]

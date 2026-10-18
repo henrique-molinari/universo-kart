@@ -81,6 +81,7 @@ func reset_players() -> void:
 		cfg.display_name = "Jogador %d" % (i + 1)
 		# Padrão: P1 magenta, P2 amarelo (piloto sempre da cor do kart).
 		cfg.color_index = 1 if i == 0 else 2
+		cfg.character = i % 2  # P1 Visitante, P2 Turista
 		cfg.set_color(Palette.SELECT_COLORS[cfg.color_index])
 		players.append(cfg)
 
@@ -100,7 +101,7 @@ func set_quality(preset: RenderQuality.Preset) -> void:
 	settings_changed.emit()
 
 
-## Gera configurações de IA com cores distintas das dos humanos.
+## Gera configurações de IA com cores distintas das dos humanos e os dois ETs alternados.
 func build_ai_configs(count: int) -> Array[PlayerConfig]:
 	var used: Array[Color] = []
 	for i in num_local_players:
@@ -112,6 +113,7 @@ func build_ai_configs(count: int) -> Array[PlayerConfig]:
 		cfg.is_human = false
 		cfg.player_index = -1
 		cfg.display_name = AI_NAMES[i % AI_NAMES.size()]
+		cfg.character = i % 2  # NPCs alternam entre os dois ETs
 		var guard := 0
 		while used.has(Palette.KART_COLORS[color_idx % Palette.KART_COLORS.size()]) and guard < 20:
 			color_idx += 1

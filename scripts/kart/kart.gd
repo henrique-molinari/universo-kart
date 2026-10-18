@@ -321,6 +321,17 @@ func can_drive() -> bool:
 	return control_enabled and stun_time <= 0.0 and spin_time <= 0.0
 
 
+## Para o kart (comemoração de fim de corrida): sem controle, sem turbo/drift e velocidade zerada.
+func halt() -> void:
+	control_enabled = false
+	autopilot_use_items = false
+	boost_time = 0.0
+	drifting = false
+	drift_charge = 0.0
+	drift_level = 0
+	_pending_velocity_reset = true
+
+
 func _read_input(delta: float) -> void:
 	if autopilot or finished:
 		_autopilot(delta)

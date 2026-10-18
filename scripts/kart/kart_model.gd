@@ -3,8 +3,8 @@ extends Node3D
 ## Modelo procedural do kart (MeshKit), fiel à foto de referência (kart de competição baixo e aberto):
 ## para-choque frontal inteiriço, bico largo e "nariz" subindo até o volante pequeno em coluna, pontões
 ## arredondados, chassi tubular cromado aparente, banco concha preto, aerofólio alto e para-choque
-## traseiro na cor do kart, slicks largos (traseiros mais largos) com aro escuro. Piloto com traje e
-## capacete da MESMA cor do kart, luvas brancas e viseira escura reflexiva. PBR: verniz, cromo,
+## traseiro na cor do kart, slicks largos (traseiros mais largos) com aro escuro. Piloto: ET (AlienDriver,
+## Visitante ou Turista) com o traje na MESMA cor do kart e as mãos no volante. PBR: verniz, cromo,
 ## borracha fosca e banco fosco com textura sutil.
 ## Local: -Z = frente, +X = direita, +Y = cima. Origem no chão, centro do kart.
 
@@ -20,11 +20,11 @@ var front_wheels: Array[Node3D] = []    ## pivôs que esterçam
 var body_root: Node3D                   ## pulinho (tudo que é visível, inclusive rodas e efeitos)
 var tilt_root: Node3D                   ## rolagem da carroceria/piloto (as rodas NÃO rolam junto)
 var _spin: Array[float] = []
-var driver: Node3D                      ## inclina nas curvas
+var driver: AlienDriver                 ## piloto ET articulado (inclina nas curvas)
+var character := 0                      ## AlienDriver.Character
 var steering_wheel: Node3D
 var paint_color: Color                  ## cor do kart
 var suit_color: Color                   ## cor usada no traje (== paint_color)
-var helmet_color: Color                 ## cor usada no capacete (== paint_color)
 ## Pontos (locais ao body_root) para efeitos.
 var exhaust_points: Array[Vector3] = [Vector3(-0.2, 0.42, 1.36), Vector3(0.2, 0.42, 1.36)]
 var rear_wheel_points: Array[Vector3] = [Vector3(-0.8, 0.06, 1.0), Vector3(0.8, 0.06, 1.0)]
@@ -68,13 +68,11 @@ func build(cfg: PlayerConfig) -> void:
 	var kc := cfg.kart_color
 	paint_color = kc
 	suit_color = kc
-	helmet_color = kc
 	var paint := _mat(0.22, 0.05, true)
 	var plastic := _mat(0.5)
 	var rubber := _mat(0.92)
 	rubber.metallic_specular = 0.2
 	var chrome := _mat(0.22, 1.0)
-	var fabric := _mat(0.68)
 	var dark := Color(0.07, 0.07, 0.08)
 	var trim := Color(0.16, 0.16, 0.18)
 	var white := Palette.WHITE
@@ -218,64 +216,27 @@ func build(cfg: PlayerConfig) -> void:
 		l.double_sided = false
 		tilt_root.add_child(l)
 
-	_build_driver(kc, fabric, paint)
+	_build_driver(cfg)
 	_build_wheels(rubber, chrome)
 
 
-func _build_driver(kc: Color, fabric: StandardMaterial3D, paint: StandardMaterial3D) -> void:
-	driver = Node3D.new()
-	driver.name = "Driver"
-	driver.position = Vector3(0, 0.55, 0.36)
+func _build_driver(cfg: PlayerConfig) -> void:
+	driver = AlienDriver.new()
+	driver.position = AlienDriver.ORIGIN
 	tilt_root.add_child(driver)
-	var o := -driver.position  # constrói em coordenadas do kart
-	var white := Palette.WHITE
-	var black := Color(0.06, 0.06, 0.07)
-	var t := MeshKit.new()
-	_blob(t, o + Vector3(0, 0.8, 0.36), Vector3(0.25, 0.3, 0.2), kc, 0.15)            # tronco
-	_blob(t, o + Vector3(0, 0.62, 0.36), Vector3(0.255, 0.05, 0.205), black)          # cinto
-	_blob(t, o + Vector3(0, 0.88, 0.165), Vector3(0.1, 0.1, 0.03), white)              # emblema
-	_blob(t, o + Vector3(0, 0.8, 0.16), Vector3(0.03, 0.2, 0.02), white)               # zíper/faixa
-	for s: float in [-1.0, 1.0]:
-		var sh := o + Vector3(s * 0.24, 0.98, 0.34)
-		var el := o + Vector3(s * 0.31, 0.84, 0.06)
-		var ha := o + Vector3(s * 0.12, 0.84, -0.27)
-		t.sphere(Transform3D(Basis.IDENTITY, sh), 0.1, 8, 12, kc)
-		_seg(t, sh, el, 0.08, 0.072, 10, kc)
-		t.sphere(Transform3D(Basis.IDENTITY, el), 0.072, 6, 10, kc)
-		_seg(t, el, ha, 0.07, 0.062, 10, kc)
-		_seg(t, ha.lerp(el, 0.22), ha.lerp(el, 0.12), 0.075, 0.075, 10, white)     # punho da luva
-		t.sphere(Transform3D(Basis.IDENTITY, ha), 0.078, 8, 12, white)             # luva
-		t.sphere(Transform3D(Basis.IDENTITY, o + Vector3(s * 0.14, 0.62, -0.42)), 0.09, 6, 10, kc.darkened(0.15))  # joelhos
-	_seg(t, o + Vector3(0, 1.0, 0.36), o + Vector3(0, 1.12, 0.33), 0.075, 0.07, 10, black)  # pescoço
-	var tm := MeshInstance3D.new()
-	tm.name = "Suit"
-	tm.mesh = t.commit(null, fabric)
-	driver.add_child(tm)
+	driver.build(cfg.character, cfg.kart_color)
+	character = driver.character
 
-	# Capacete fechado e brilhante (mesma cor do kart) com faixa branca.
-	var h := MeshKit.new()
-	var hc := o + Vector3(0, 1.31, 0.3)
-	_blob(h, hc, Vector3(0.3, 0.3, 0.325), kc, 0.12, 14, 24)
-	_blob(h, hc, Vector3(0.07, 0.307, 0.332), white, 0.0, 14, 16)
-	_blob(h, hc + Vector3(0, -0.2, 0.02), Vector3(0.24, 0.1, 0.26), black)              # base/colar
-	var hm := MeshInstance3D.new()
-	hm.name = "Helmet"
-	hm.mesh = h.commit(null, paint)
-	driver.add_child(hm)
-	# Viseira escura reflexiva.
-	var vk := MeshKit.new()
-	_blob(vk, hc + Vector3(0, -0.01, -0.13), Vector3(0.245, 0.14, 0.2), Color(0.02, 0.03, 0.07), 0.0, 12, 20)
-	var vmat := StandardMaterial3D.new()
-	vmat.vertex_color_use_as_albedo = true
-	vmat.metallic = 1.0
-	vmat.roughness = 0.04
-	vmat.clearcoat_enabled = true
-	vmat.clearcoat = 1.0
-	vmat.clearcoat_roughness = 0.0
-	var vm := MeshInstance3D.new()
-	vm.name = "Visor"
-	vm.mesh = vk.commit(null, vmat)
-	driver.add_child(vm)
+
+## Pose do piloto ET (volante, vitória ou derrota).
+func set_pose(p: AlienDriver.Pose) -> void:
+	driver.set_pose(p)
+
+
+## Ponto de pega no volante (lado s = -1/+1) no espaço do piloto; acompanha o giro do volante.
+func _grip(s: float) -> Vector3:
+	var p := steering_wheel.transform * Vector3(s * 0.13, 0.0, 0.0)
+	return driver.transform.affine_inverse() * p
 
 
 func _wheel_mesh(r: float, w: float, rubber: Material, chrome: Material) -> ArrayMesh:
@@ -351,3 +312,4 @@ func animate(speed: float, steer: float, delta: float, drift_dir: float = 0.0) -
 	body_root.position = Vector3(0, y, 0)
 	tilt_root.rotation = Vector3(0, 0, _roll)
 	driver.rotation = Vector3(0, 0, _lean)
+	driver.animate_rig(delta, st, _grip(-1.0), _grip(1.0))

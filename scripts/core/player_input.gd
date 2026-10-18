@@ -158,3 +158,13 @@ static func nav_x(player_index: int) -> int:
 	if _btn(player_index, JOY_BUTTON_DPAD_RIGHT) or _key(player_index, RIGHT) > 0.5:
 		v = 1.0
 	return 0 if absf(v) < 0.5 else int(signf(v))
+
+
+## Navegação vertical de menu em {-1, 0, 1} (-1 = cima): analógico, D-pad ou teclado (W/S, setas).
+static func nav_y(player_index: int) -> int:
+	var v := _axis(player_index, JOY_AXIS_LEFT_Y, 0.5)
+	if _btn(player_index, JOY_BUTTON_DPAD_UP) or _key(player_index, UP) > 0.5:
+		v = -1.0
+	if _btn(player_index, JOY_BUTTON_DPAD_DOWN) or _key(player_index, DOWN) > 0.5:
+		v = 1.0
+	return 0 if absf(v) < 0.5 else int(signf(v))

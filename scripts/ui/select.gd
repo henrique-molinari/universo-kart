@@ -1,10 +1,11 @@
 class_name SelectScreen
 extends Control
-## Seleção de cor 2P lado a lado. Cada jogador usa o PRÓPRIO controle/teclado (PlayerInput, mesma
-## atribuição de device da corrida): ◀ ▶ escolhe entre 8 cores, A/Enter confirma ("PRONTO!"),
-## B cancela o PRONTO (ou volta ao título se não estava pronto). Cores repetidas são permitidas.
-## Prévia 3D do kart + piloto (traje e capacete na mesma cor) girando num pedestal.
-## Quando os dois confirmam, as cores vão para GameState.players e a corrida começa.
+## Seleção 2P lado a lado: personagem (ET Visitante ou Turista) + cor do kart. Cada jogador usa o PRÓPRIO
+## controle/teclado (PlayerInput, mesma atribuição de device da corrida): ▲ ▼ alterna entre as linhas
+## PERSONAGEM e COR, ◀ ▶ troca o valor, A/Enter confirma ("PRONTO!", o ET comemora na prévia),
+## B cancela o PRONTO (ou volta ao título se não estava pronto). Cores e personagens repetidos são permitidos.
+## Prévia 3D do kart + ET (traje na cor do kart) girando num pedestal.
+## Quando os dois confirmam, personagem e cor vão para GameState.players e a corrida começa.
 
 const RACE_SCENE := "res://scenes/race.tscn"
 const TITLE_SCENE := "res://scenes/title.tscn"
@@ -12,6 +13,10 @@ const START_DELAY := 0.9
 const BG_SHADER := preload("res://assets/shaders/soft_pattern.gdshader")
 
 var sel: Array[int] = [0, 0]
+var char_sel: Array[int] = [0, 1]
+var row: Array[int] = [0, 0]      ## 0 = personagem, 1 = cor
+var _prev_nav_y: Array[int] = [0, 0]
+var _char_labels: Array[Label] = []
 var ready_flags: Array[bool] = [false, false]
 var _prev_nav: Array[int] = [0, 0]
 var _prev_ok: Array[bool] = [true, true]
@@ -35,6 +40,7 @@ func _ready() -> void:
 	AudioManager.play_music(&"title")
 	for i in 2:
 		sel[i] = clampi(GameState.get_player(i).color_index, 0, Palette.SELECT_COLORS.size() - 1)
+		char_sel[i] = clampi(GameState.get_player(i).character, 0, AlienDriver.NAMES.size() - 1)
 	# Fundo sóbrio e dessaturado (os karts coloridos se destacam), com padrão sutil.
 	var bg := ColorRect.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -43,7 +49,7 @@ func _ready() -> void:
 	bgm.shader = BG_SHADER
 	bg.material = bgm
 	add_child(bg)
-	var header := UiKit.label("ESCOLHA A COR DO SEU KART", 64, Palette.YELLOW, 12)
+	var header := UiKit.label("ESCOLHA SEU ET E A COR DO KART", 64, Palette.YELLOW, 12)
 	UiKit.anchor(header, Control.PRESET_CENTER_TOP, Rect2(-800, 24, 1600, 90))
 	add_child(header)
 	var row := HBoxContainer.new()
@@ -52,10 +58,10 @@ func _ready() -> void:
 	add_child(row)
 	for i in 2:
 		row.add_child(_build_panel(i))
-	var foot := UiKit.label("◀ ▶ escolher cor     A / Enter: PRONTO!     B: voltar", 30, Palette.WHITE, 6)
+	var foot := UiKit.label("▲ ▼ personagem / cor     ◀ ▶ trocar     A / Enter: PRONTO!     B: voltar", 30, Palette.WHITE, 6)
 	UiKit.anchor(foot, Control.PRESET_CENTER_BOTTOM, Rect2(-900, -104, 1800, 44))
 	add_child(foot)
-	var note := UiKit.label("Os dois jogadores podem escolher a mesma cor. A corrida começa quando os dois estiverem PRONTOS.", 22, Color(1, 1, 1, 0.75), 4)
+	var note := UiKit.label("Personagens e cores podem se repetir. A corrida começa quando os dois estiverem PRONTOS.", 22, Color(1, 1, 1, 0.75), 4)
 	UiKit.anchor(note, Control.PRESET_CENTER_BOTTOM, Rect2(-900, -58, 1800, 36))
 	add_child(note)
 	for i in 2:
@@ -90,7 +96,7 @@ func _build_panel(i: int) -> Control:
 	var cont := SubViewportContainer.new()
 	cont.stretch = true
 	cont.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	cont.custom_minimum_size = Vector2(0, 360)
+	cont.custom_minimum_size = Vector2(0, 300)
 	v.add_child(cont)
 	var vp := SubViewport.new()
 	vp.own_world_3d = true
@@ -99,7 +105,10 @@ func _build_panel(i: int) -> Control:
 	cont.add_child(vp)
 	_build_preview_world(vp)
 
-	var name_l := UiKit.label("", 40, Palette.WHITE, 8)
+	var char_l := UiKit.label("", 40, Palette.WHITE, 8)
+	v.add_child(char_l)
+	_char_labels.append(char_l)
+	var name_l := UiKit.label("", 30, Palette.WHITE, 6)
 	v.add_child(name_l)
 	_name_labels.append(name_l)
 	var sw_row := HBoxContainer.new()
@@ -189,8 +198,8 @@ func _build_preview_world(vp: SubViewport) -> void:
 	_models.append(null)
 	var cam := Camera3D.new()
 	cam.fov = 36.0
-	var eye := Vector3(0, 2.3, 5.6)
-	cam.transform = Transform3D(Basis.looking_at(Vector3(0, 0.55, 0) - eye), eye)
+	var eye := Vector3(0, 1.9, 4.5)
+	cam.transform = Transform3D(Basis.looking_at(Vector3(0, 0.78, 0) - eye), eye)
 	root.add_child(cam)
 	cam.current = true
 
@@ -201,6 +210,7 @@ func _refresh(i: int) -> void:
 	var cfg := PlayerConfig.new()
 	cfg.player_index = i
 	cfg.set_color(c)
+	cfg.character = char_sel[i]
 	if _models[i] != null:
 		_models[i].queue_free()
 	var m := KartModel.new()
@@ -208,8 +218,14 @@ func _refresh(i: int) -> void:
 	m.position = Vector3(0, 0, 0.1)
 	_turntables[i].add_child(m)
 	_models[i] = m
-	_name_labels[i].text = Palette.SELECT_COLOR_NAMES[sel[i]]
-	_name_labels[i].add_theme_color_override(&"font_color", c.lightened(0.25))
+	var on_char := row[i] == 0 and not ready_flags[i]
+	var on_col := row[i] == 1 and not ready_flags[i]
+	_char_labels[i].text = ("◀  %s  ▶" if on_char else "%s") % AlienDriver.NAMES[char_sel[i]].to_upper()
+	_char_labels[i].add_theme_color_override(&"font_color", Palette.YELLOW if on_char else Palette.WHITE)
+	_name_labels[i].text = ("◀  KART %s  ▶" if on_col else "KART %s") % Palette.SELECT_COLOR_NAMES[sel[i]].to_upper()
+	_name_labels[i].add_theme_color_override(&"font_color", c.lightened(0.25) if on_col else Color(1, 1, 1, 0.8))
+	if ready_flags[i]:
+		m.set_pose(AlienDriver.Pose.VICTORY)
 	for k in _swatches[i].size():
 		var sw: Panel = _swatches[i][k]
 		var sb := sw.get_theme_stylebox(&"panel") as StyleBoxFlat
@@ -227,7 +243,7 @@ func _update_status(i: int) -> void:
 		_status_labels[i].add_theme_color_override(&"font_color", Color(0.35, 1.0, 0.45))
 		sb.border_color = Color(0.35, 1.0, 0.45)
 	else:
-		_status_labels[i].text = "◀  escolha  ▶"
+		_status_labels[i].text = "▲ ▼  ◀ ▶"
 		_status_labels[i].add_theme_color_override(&"font_color", Palette.YELLOW)
 		sb.border_color = Palette.SELECT_COLORS[sel[i]].lightened(0.3)
 
@@ -240,35 +256,46 @@ func _process(delta: float) -> void:
 	_t += delta
 	for i in 2:
 		if i < _turntables.size():
-			_turntables[i].rotation.y = _t * (0.9 if not ready_flags[i] else 2.2) + i * PI
+			_turntables[i].rotation.y = _t * (0.9 if not ready_flags[i] else 2.2) + i * 0.35
+		if i < _models.size() and _models[i] != null:
+			_models[i].animate(0.0, sin(_t * 1.3 + i) * 0.35, delta)
 		var dev := PlayerInput.device_of(i)
 		_device_labels[i].text = ("Controle %d" % dev) if dev >= 0 else ("Teclado (A/D, Espaço/E, Q)" if i == 0 else "Teclado (setas, Enter num., Backspace)")
 	if _leaving:
 		return
 	for i in 2:
 		var nav := PlayerInput.nav_x(i)
+		var nav_y := PlayerInput.nav_y(i)
 		var ok := _confirm_pressed(i)
 		var back := PlayerInput.cancel(i)
+		if not ready_flags[i] and nav_y != 0 and nav_y != _prev_nav_y[i]:
+			row[i] = clampi(row[i] + nav_y, 0, 1)
+			AudioManager.sfx(&"move")
+			_refresh(i)
 		if not ready_flags[i] and nav != 0 and nav != _prev_nav[i]:
-			sel[i] = wrapi(sel[i] + nav, 0, Palette.SELECT_COLORS.size())
+			if row[i] == 0:
+				char_sel[i] = wrapi(char_sel[i] + nav, 0, AlienDriver.NAMES.size())
+			else:
+				sel[i] = wrapi(sel[i] + nav, 0, Palette.SELECT_COLORS.size())
 			AudioManager.sfx(&"move")
 			_refresh(i)
 		if ok and not _prev_ok[i] and not ready_flags[i]:
 			ready_flags[i] = true
 			AudioManager.sfx(&"confirm")
-			_update_status(i)
+			_refresh(i)
 		if back and not _prev_back[i]:
 			if ready_flags[i]:
 				ready_flags[i] = false
 				_start_timer = -1.0
 				AudioManager.sfx(&"back")
-				_update_status(i)
+				_refresh(i)
 			else:
 				_leaving = true
 				AudioManager.sfx(&"back")
 				SceneRouter.goto(TITLE_SCENE)
 				return
 		_prev_nav[i] = nav
+		_prev_nav_y[i] = nav_y
 		_prev_ok[i] = ok
 		_prev_back[i] = back
 	if ready_flags[0] and ready_flags[1]:
@@ -287,6 +314,7 @@ func _start_race() -> void:
 		var cfg := GameState.get_player(i)
 		cfg.color_index = sel[i]
 		cfg.set_color(Palette.SELECT_COLORS[sel[i]])
-	print("[Select] cores: P1 %s, P2 %s" % [Palette.SELECT_COLOR_NAMES[sel[0]], Palette.SELECT_COLOR_NAMES[sel[1]]])
+		cfg.character = char_sel[i]
+	print("[Select] P1 %s / %s, P2 %s / %s" % [AlienDriver.NAMES[char_sel[0]], Palette.SELECT_COLOR_NAMES[sel[0]], AlienDriver.NAMES[char_sel[1]], Palette.SELECT_COLOR_NAMES[sel[1]]])
 	AudioManager.sfx(&"go")
 	SceneRouter.goto(RACE_SCENE)

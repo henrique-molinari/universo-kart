@@ -1,8 +1,8 @@
 extends Node
 ## Teste headless do fluxo de telas com entrada simulada:
-## splash -> título (Enter) -> seleção (P1/P2 escolhem cores, B cancela PRONTO, A confirma) -> corrida
-## (cores chegam aos karts; traje e capacete do piloto = cor do kart) -> resultado (A: correr de novo,
-## B: seleção) -> B na seleção volta ao título.
+## splash -> título (Enter) -> seleção (P1/P2 escolhem ET e cor, B cancela PRONTO, A confirma) -> corrida
+## (ET e cor chegam aos karts; traje do ET = cor do kart; NPCs com os dois ETs) -> comemoração ->
+## resultado (A: correr de novo, B: seleção) -> B na seleção volta ao título.
 ## Uso: Godot_console.exe --headless --fixed-fps 60 --path <projeto> res://tools/validate/validate_flow.tscn
 
 var _checks := 0
@@ -87,15 +87,23 @@ func _run() -> void:
 	var sel := get_tree().current_scene as SelectScreen
 	await _frames(40)
 	var s0: Array[int] = sel.sel.duplicate()
+	var c0: Array[int] = sel.char_sel.duplicate()
+	_check(c0 == [0, 1] and sel._models[0].character == 0 and sel._models[1].character == 1, "seleção abre com os 2 ETs (P1 Visitante, P2 Turista) na prévia")
+	# P1: troca o personagem (linha 0), desce para a cor e avança 2. P2: desce e volta 1 cor (mantém o ET).
+	await _tap_action(&"p1_right")
+	await _tap_action(&"p1_down")
 	await _tap_action(&"p1_right")
 	await _tap_action(&"p1_right")
+	await _tap_action(&"p2_down")
 	await _tap_action(&"p2_left")
 	var n := Palette.SELECT_COLORS.size()
 	var want: Array[int] = [(s0[0] + 2) % n, (s0[1] - 1 + n) % n]
+	var want_c: Array[int] = [1 - c0[0], c0[1]]
 	_check(sel.sel == want, "cada jogador troca a própria cor (P1 %d->%d, P2 %d->%d)" % [s0[0], sel.sel[0], s0[1], sel.sel[1]])
+	_check(sel.char_sel == want_c, "cada jogador escolhe o próprio ET (P1 %s, P2 %s)" % [AlienDriver.NAMES[sel.char_sel[0]], AlienDriver.NAMES[sel.char_sel[1]]])
 	var pm: KartModel = sel._models[0]
-	_check(pm != null and pm.paint_color == Palette.SELECT_COLORS[want[0]] and pm.suit_color == pm.paint_color and pm.helmet_color == pm.paint_color,
-		"prévia 3D do P1 na cor escolhida, piloto na mesma cor")
+	_check(pm != null and pm.paint_color == Palette.SELECT_COLORS[want[0]] and pm.suit_color == pm.paint_color and pm.character == want_c[0],
+		"prévia 3D do P1 mostra o ET e a cor escolhidos")
 	await _tap_action(&"p1_confirm")
 	_check(sel.ready_flags[0] and not sel.ready_flags[1], "P1 PRONTO (P2 ainda não)")
 	await _tap_action(&"p1_cancel")
@@ -114,18 +122,37 @@ func _run() -> void:
 		var c := Palette.SELECT_COLORS[want[i]]
 		var k := race.karts[i]
 		var m := k.model
-		var suit := _mesh_color(m.driver.get_node("Suit") as MeshInstance3D)
-		var helm := _mesh_color(m.driver.get_node("Helmet") as MeshInstance3D)
+		var suit := _mesh_color(m.driver.body)
 		_check(k.config.kart_color == c and m.paint_color == c, "P%d: kart na cor escolhida (%s)" % [i + 1, Palette.SELECT_COLOR_NAMES[want[i]]])
 		var tol := 0.01
-		var same := absf(suit.r - c.r) < tol and absf(suit.g - c.g) < tol and absf(suit.b - c.b) < tol 			and absf(helm.r - c.r) < tol and absf(helm.g - c.g) < tol and absf(helm.b - c.b) < tol
-		_check(same and k.config.suit_color == c and k.config.helmet_color == c,
-			"P%d: traje e capacete do piloto = cor do kart" % (i + 1))
+		var same := absf(suit.r - c.r) < tol and absf(suit.g - c.g) < tol and absf(suit.b - c.b) < tol
+		_check(same and k.config.suit_color == c, "P%d: traje do ET = cor do kart" % (i + 1))
+		_check(k.config.character == want_c[i] and m.character == want_c[i] and m.driver.character == want_c[i],
+			"P%d: ET escolhido no kart (%s)" % [i + 1, AlienDriver.NAMES[want_c[i]]])
+	var npc_chars: Array[int] = []
+	for i in range(2, race.karts.size()):
+		npc_chars.append(race.karts[i].model.character)
+	_check(npc_chars.has(0) and npc_chars.has(1) and absi(npc_chars.count(0) - npc_chars.count(1)) <= 1,
+		"NPCs distribuídos entre os 2 ETs %s" % str(npc_chars))
 	await _frames(30)
 	_check(AudioManager.current_music() == &"race", "música da corrida tocando/pedida")
 
+	# Fim de corrida: a comemoração (vitória/derrota) toca ANTES do resultado.
+	for i in 400:
+		if race.state == Race.State.RACING:
+			break
+		await _frames(1)
+	race._force_finish(1)
+	await _frames(2)
+	_check(race.state == Race.State.CELEBRATION and race.winner == 1 and race.karts[1].model.driver.pose == AlienDriver.Pose.VICTORY
+		and race.karts[0].model.driver.pose == AlienDriver.Pose.DEFEAT and not race._results.visible,
+		"fim de corrida -> comemoração (P2 vitória, P1 derrota) antes do resultado")
+	await _frames(100)
+	await _tap_action(&"p1_confirm")
+	await _frames(4)
+	_check(race.state == Race.State.RESULTS and race._results.visible, "A pula a comemoração -> resultado")
 	# Resultado: A corre de novo, B volta à seleção.
-	race._show_results()
+	await _frames(10)
 	await _frames(10)
 	await _tap_action(&"p1_confirm")
 	await _frames(10)

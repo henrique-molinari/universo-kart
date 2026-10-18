@@ -9,15 +9,20 @@ extends Node
 ##   --shot=<arquivo.png>   salva a tela após --shot-time segundos de corrida e sai
 ##   --shot-time=<s>        (padrão 6)
 ##   --closeup              câmera de perto no P1 (com drift automático); a captura espera um drift nível 2+
+##   --celebrate=<i>        encerra a corrida logo após a largada com o kart <i> em 1º (captura da comemoração;
+##                          a captura sai em --shot-time segundos de comemoração)
 ##
 ## A pista vem de GameState.ensure_track() (construída uma vez na splash e reaproveitada).
 
 signal race_finished
 
-enum State { COUNTDOWN, RACING, RESULTS }
+enum State { COUNTDOWN, RACING, CELEBRATION, RESULTS }
 
 const COUNTDOWN_TIME := 3.0
 const CP_WINDOW := 35.0
+## Comemoração antes do resultado: plano 1 (cada tela mostra o próprio ET) e plano 2 (as duas mostram o vencedor).
+const CELEBRATION_TIME := 6.0
+const CELEBRATION_SHOT2 := 3.2
 const SELECT_SCENE := "res://scenes/select.tscn"
 const RACE_SCENE := "res://scenes/race.tscn"
 
@@ -65,6 +70,12 @@ var _last_lap_music := false
 var _shot_path := ""
 var _shot_time := 6.0
 var _last_go := -1
+var celebration_time := 0.0
+var celebration_played := false
+var winner := -1
+var _celebrate_force := -1
+var _celeb_cams: Array[Camera3D] = []
+var _celeb_labels: Array[Label] = []
 
 
 func _ready() -> void:
@@ -83,6 +94,8 @@ func _ready() -> void:
 			_closeup_both = true
 		elif a.begins_with("--cam="):
 			_cam_view = a.substr(6)
+		elif a.begins_with("--celebrate="):
+			_celebrate_force = a.substr(12).to_int()
 		elif a == "--closeup-still":
 			_closeup = true
 			_closeup_still = true
@@ -238,7 +251,15 @@ func _process(delta: float) -> void:
 		var eye := kx.origin + kx.basis * off
 		var up := kx.basis.y if _cam_view != "top" else -kx.basis.z
 		ccam.global_transform = Transform3D(Basis.looking_at(kx.origin + kx.basis.y * 0.4 - eye, up), eye)
-	if state == State.RESULTS:
+	if state == State.CELEBRATION or state == State.RESULTS:
+		_update_celebration(delta)
+	if state == State.CELEBRATION:
+		for i in 2:
+			var c := PlayerInput.confirm(i)
+			if c and not _confirm_prev[i] and celebration_time > 1.2:
+				_show_results()
+			_confirm_prev[i] = c
+	elif state == State.RESULTS:
 		for i in 2:
 			var c := PlayerInput.confirm(i)
 			var b := PlayerInput.cancel(i)
@@ -258,6 +279,8 @@ func _process(delta: float) -> void:
 		shot_ready = shot_ready and karts[0].drifting and karts[0].drift_level >= need
 	if _closeup_still:
 		shot_ready = state == State.COUNTDOWN and countdown < 1.2
+	if _celebrate_force >= 0:
+		shot_ready = state == State.CELEBRATION and celebration_time >= _shot_time
 	if _shot_path != "" and shot_ready:
 		var img := get_viewport().get_texture().get_image()
 		img.save_png(_shot_path)
@@ -290,8 +313,10 @@ func _physics_process(delta: float) -> void:
 				for h in huds:
 					h.show_message("GO!", "", 0.8)
 				AudioManager.sfx(&"go")
-		State.RACING, State.RESULTS:
+		State.RACING, State.CELEBRATION, State.RESULTS:
 			race_time += delta
+			if _celebrate_force >= 0 and state == State.RACING and race_time > 0.6:
+				_force_finish(_celebrate_force)
 			for i in karts.size():
 				_update_checkpoints(i)
 			_update_places()
@@ -378,6 +403,89 @@ func _finish(i: int, time: float = -1.0) -> void:
 		huds[i].show_message("%dº LUGAR" % finish_count, "Tempo %s" % format_time(time))
 	print("[Race] %s terminou em %dº (%s)%s" % [racer_name(i), finish_count, format_time(time), " (estimado)" if d["forced"] else ""])
 	if finish_count >= karts.size():
+		_start_celebration()
+
+
+## Captura/teste: encerra a corrida já com o kart `first` em 1º e os demais na ordem atual.
+func _force_finish(first: int) -> void:
+	var order: Array[int] = [clampi(first, 0, karts.size() - 1)]
+	for i in _order:
+		if not order.has(i):
+			order.append(i)
+	for j in order.size():
+		if not karts[order[j]].finished:
+			data[order[j]]["forced"] = true
+			_finish(order[j], race_time + float(j) * 1.3)
+
+
+## Todos chegaram: os karts param, o 1º comemora (pose de vitória) e os demais lamentam (derrota).
+## Sequência curta de câmera (CELEBRATION_TIME) antes do resultado; A pula depois de 1,2 s.
+func _start_celebration() -> void:
+	state = State.CELEBRATION
+	celebration_played = true
+	celebration_time = 0.0
+	_confirm_prev = [true, true]
+	winner = 0
+	for i in karts.size():
+		if int(data[i]["place"]) == 1:
+			winner = i
+	for i in karts.size():
+		karts[i].halt()
+		karts[i].model.set_pose(AlienDriver.Pose.VICTORY if i == winner else AlienDriver.Pose.DEFEAT)
+	for i in viewports.size():
+		huds[i].visible = false
+		var cam := Camera3D.new()
+		cam.fov = 40.0
+		cam.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		viewports[i].add_child(cam)
+		cam.current = true
+		_celeb_cams.append(cam)
+		var l := UiKit.label("", 64, Palette.YELLOW, 12)
+		l.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+		l.offset_top = 18.0
+		l.offset_bottom = 100.0
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		viewports[i].add_child(l)
+		_celeb_labels.append(l)
+	AudioManager.sfx(&"lastlap")
+	print("[Race] comemoração: %s venceu (%s)" % [racer_name(winner), AlienDriver.NAMES[karts[winner].model.character]])
+	_update_celebration(0.0)
+
+
+func _update_celebration(delta: float) -> void:
+	celebration_time += delta
+	var t := celebration_time
+	var shot2 := t >= CELEBRATION_SHOT2
+	for i in _celeb_cams.size():
+		var target := winner if shot2 else i
+		var kx := karts[target].model.get_global_transform_interpolated()
+		var a: float
+		var off: Vector3
+		var look_h := 1.12
+		if not shot2:
+			a = -0.7 + t * 0.15
+			off = Vector3(sin(a) * 2.3, 1.45, -cos(a) * 2.3)
+		elif i == 0:
+			a = 0.45 - (t - CELEBRATION_SHOT2) * 0.2
+			off = Vector3(sin(a) * 2.3, 0.85, -cos(a) * 2.3)
+			look_h = 1.15
+		else:
+			a = -0.9 + (t - CELEBRATION_SHOT2) * 0.16
+			off = Vector3(sin(a) * 4.2, 2.1, -cos(a) * 4.2)
+			look_h = 0.8
+		var eye := kx.origin + kx.basis * off
+		_celeb_cams[i].global_transform = Transform3D(Basis.looking_at(kx.origin + kx.basis.y * look_h - eye, kx.basis.y), eye)
+		var l := _celeb_labels[i]
+		if shot2:
+			l.text = "VENCEDOR: %s" % racer_name(winner)
+			l.add_theme_color_override(&"font_color", Palette.YELLOW)
+		elif target == winner:
+			l.text = "VITÓRIA!"
+			l.add_theme_color_override(&"font_color", Palette.YELLOW)
+		else:
+			l.text = "%dº LUGAR" % int(data[target]["place"])
+			l.add_theme_color_override(&"font_color", Palette.WHITE)
+	if state == State.CELEBRATION and t >= CELEBRATION_TIME:
 		_show_results()
 
 
