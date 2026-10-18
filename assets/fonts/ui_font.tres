@@ -1,0 +1,7 @@
+[gd_resource type="SystemFont" format=3]
+
+[resource]
+font_names = PackedStringArray("Segoe UI", "Arial")
+font_weight = 700
+antialiasing = 1
+generate_mipmaps = true

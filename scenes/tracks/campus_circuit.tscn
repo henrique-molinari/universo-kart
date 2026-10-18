@@ -1,0 +1,37 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/track/track.gd" id="1_track"]
+[ext_resource type="Script" path="res://scripts/track/track_path.gd" id="2_path"]
+[ext_resource type="Resource" path="res://scenes/tracks/campus_circuit_layout.tres" id="3_layout"]
+[ext_resource type="Environment" path="res://assets/environment/campus_day.tres" id="4_env"]
+[ext_resource type="Script" path="res://scripts/track/sky_controller.gd" id="5_sky"]
+
+[node name="CampusCircuit" type="Node3D"]
+script = ExtResource("1_track")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = ExtResource("4_env")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.6, 0.8, 0, -0.8, 0.6, 0, 50, 0)
+light_color = Color(1, 0.96, 0.9, 1)
+light_energy = 1.25
+light_angular_distance = 0.5
+shadow_enabled = true
+shadow_bias = 0.03
+shadow_normal_bias = 1.2
+shadow_blur = 1.0
+directional_shadow_split_1 = 0.08
+directional_shadow_split_2 = 0.2
+directional_shadow_split_3 = 0.45
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 200.0
+
+[node name="SkyController" type="Node" parent="." node_paths=PackedStringArray("world_environment", "sun")]
+script = ExtResource("5_sky")
+world_environment = NodePath("../WorldEnvironment")
+sun = NodePath("../Sun")
+
+[node name="TrackPath" type="Node3D" parent="."]
+script = ExtResource("2_path")
+layout = ExtResource("3_layout")
